@@ -9,5 +9,6 @@
 & "$PsScriptRoot\rmm\deploy-automate.ps1"
 & "$PsScriptRoot\servers\update-windows.ps1"
 & "$PsScriptRoot\hyper-v\hyper-v-config.ps1"
+& "$PsScriptRoot\bitlocker.ps1"
 
 
