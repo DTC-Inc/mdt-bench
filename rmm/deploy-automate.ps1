@@ -24,7 +24,7 @@ $Password = $null
 ##### Variables #####
 
 #Set LocationID to install the Automate Agent directly to the appropieate client's location / site.
-$LocationId = Read-Host "Enter location ID"
+$LocationId = '676'
 
 ##### Script Logic #####
 
