@@ -17,9 +17,9 @@ Set these up in Nerdio Manager under Settings->Portal. The variables to create a
 
 ##### Secure Variables #####
 
-$Server = 'automate.dtctoday.com'
-$Token = 'f62d4d0e8d84c6f29e55b7b02ec17d62'
-$Password = $null
+$Server = $arg[0]
+$Token = $arg[1]
+#'f62d4d0e8d84c6f29e55b7b02ec17d62'
 
 ##### Variables #####
 
