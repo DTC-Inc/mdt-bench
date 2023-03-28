@@ -21,9 +21,13 @@ $Server = $arg[0]
 $Token = $arg[1]
 $LocationId = $arg[2] | Out-String
 
-#'f62d4d0e8d84c6f29e55b7b02ec17d62'
-
 ##### Variables #####
+if ($Server = $null) {
+    $Server = Read-Host "Enter automate server FQDN"
+}
+if ($LocationId = $null) {
+    $Token = Read-Host "Enter automate install token"
+}
 
 #Set LocationID to install the Automate Agent directly to the appropieate client's location / site.
 if ($LocationId = $null) {
