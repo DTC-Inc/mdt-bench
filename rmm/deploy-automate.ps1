@@ -19,12 +19,16 @@ Set these up in Nerdio Manager under Settings->Portal. The variables to create a
 
 $Server = $arg[0]
 $Token = $arg[1]
+$LocationId = $arg[2] | Out-String
+
 #'f62d4d0e8d84c6f29e55b7b02ec17d62'
 
 ##### Variables #####
 
 #Set LocationID to install the Automate Agent directly to the appropieate client's location / site.
-$LocationId = Read-Host "Enter location ID"
+if ($LocationId = $null) {
+    $LocationId = Read-Host "Enter location ID"
+}
 
 ##### Script Logic #####
 
