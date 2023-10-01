@@ -1,12 +1,12 @@
 param([switch]$elevated)
 
 Get-VirtualDisk | Remove-VirtualDisk -confirm:$false
-Get-data1Pool | Where -property isPrimordial -eq $false | Remove-data1Pool -confirm:$false
+Get-StoragePool | Where -property isPrimordial -eq $false | Remove-StoragePool -confirm:$false
 Get-Disk | Where-Object isOffline -eq $true | Set-Disk -isOffline $false
-Update-data1ProviderCache
-Get-data1Pool | ? isPrimordial -eq $false | Set-data1Pool -isReadOnly:$false -errorAction silentlyContinue
-Get-data1Pool | ? isPrimorial -eq $false | Get-VirtualDisk | Remove-VirtualDisk -confirm:$false -errorAction silentlyContinue
-Get-data1Pool | ? isPrimordial -eq $false | Remove-data1Pool -confirm:$false -errorAction silentlyContinue
+Update-StorageProviderCache
+Get-StoragePool | ? isPrimordial -eq $false | Set-StoragePool -isReadOnly:$false -errorAction silentlyContinue
+Get-StoragePool | ? isPrimorial -eq $false | Get-VirtualDisk | Remove-VirtualDisk -confirm:$false -errorAction silentlyContinue
+Get-StoragePool | ? isPrimordial -eq $false | Remove-StoragePool -confirm:$false -errorAction silentlyContinue
 Get-PhysicalDisk | Reset-PhysicalDisk -errorAction silentlyContinue
 Get-Disk | ? number -ne $null | ? isBoot -ne $true | ? isSystem -ne $true | ? partitionStyle -ne RAW | % {
     $_ | Set-Disk -isOffline:$false
