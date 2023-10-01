@@ -18,5 +18,5 @@ Get-Disk | ? number -ne $null | ? isBoot -ne $true | ? isSystem -ne $true | ? pa
 Get-Disk | Where number -Ne $Null | Where isBoot -Ne $true | Where isSystem -Ne $true | Where partitionStyle -eq RAW | Group -noElement -property friendlyName
 $physicalDisk = Get-PhysicalDisk -canPool $true
 $Storagesubsystem = Get-StorageSubsystem |Select-Object -expandProperty friendlyName
-New-StoragePool -friendlyName pool1 -data1SubsystemFriendlyName $StorageSubsystem -physicalDisks $physicalDisk
-New-Volume -friendlyName "data1" -fileSystem NTFS -data1PoolFriendlyName "pool1" -UseMaximumSize -resiliencySettingName mirror -accessPath D:
+New-StoragePool -friendlyName pool1 -StorageSubsystemFriendlyName $StorageSubsystem -physicalDisks $physicalDisk
+New-Volume -friendlyName "data1" -fileSystem NTFS -StoragePoolFriendlyName "pool1" -UseMaximumSize -resiliencySettingName mirror -accessPath D:
