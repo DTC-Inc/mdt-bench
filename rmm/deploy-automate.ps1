@@ -40,10 +40,10 @@ if(($Token -eq $null) -and  ($Password -eq $null)) {
 Write-Output "ERROR: The secure variables AutomateServerToken or SystemPassword are not provided"
 }
 
-elseif ($Password) {
+else if ($Password) {
 [Net.ServicePointManager]::SecurityProtocol = [Enum]::ToObject([Net.SecurityProtocolType], 3072); Invoke-Expression(New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/Get-Nerdio/NMM/main/scripted-actions/modules/CMSP_Automate-Module.psm1'); Install-Automate -Server $Server -LocationID $LocationId -SystemPassword $Password -Transcript
 }
 
-elseif ($Token) {
+else if ($Token) {
 [Net.ServicePointManager]::SecurityProtocol = [Enum]::ToObject([Net.SecurityProtocolType], 3072); Invoke-Expression(New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/Get-Nerdio/NMM/main/scripted-actions/modules/CMSP_Automate-Module.psm1'); Install-Automate -Server $Server -LocationID $LocationId -Token $Token -Transcript
 }
