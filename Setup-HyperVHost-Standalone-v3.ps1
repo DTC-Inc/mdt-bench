@@ -13,7 +13,7 @@
     The script will log clearly when reboots are needed and can be re-run after each reboot.
 .NOTES
     Author: DTC Inc
-    Version: 3.1 MSP Template (Multi-Reboot Aware)
+    Version: 3.2 MSP Template (Enhanced Logging & Timeout Handling)
     Date: 2025-12-19
 #>
 
@@ -37,7 +37,7 @@
 # SECTION 1: RMM VARIABLE DECLARATION AND INPUT HANDLING
 # ============================================================================
 
-$ScriptVersion = "3.1"
+$ScriptVersion = "3.2"
 $ScriptLogName = "HyperVHost-Setup-v3"
 $ServerRole = "HV"  # Hyper-V Host role code
 
@@ -161,11 +161,45 @@ $LogFile = Join-Path $LogPath "$ScriptLogName-$(Get-Date -Format 'yyyy-MM-dd-HHm
 # Track what needs reboots
 $Global:RebootReasons = @()
 $Global:RestartRequired = $false
+$Global:ProgressStep = 0
+$Global:TotalSteps = 10
+
+function Write-LogProgress {
+    param(
+        [string]$Message,
+        [string]$Level = "Info"
+    )
+
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"
+    $logMessage = "[$timestamp] [$Level] $Message"
+
+    switch ($Level) {
+        "Error"   { Write-Host $logMessage -ForegroundColor Red }
+        "Warning" { Write-Host $logMessage -ForegroundColor Yellow }
+        "Success" { Write-Host $logMessage -ForegroundColor Green }
+        "Debug"   { Write-Host $logMessage -ForegroundColor Gray }
+        default   { Write-Host $logMessage }
+    }
+
+    # Force flush the transcript buffer
+    if ($Host.Name -eq "Windows PowerShell ISE Host" -or $Host.Name -eq "ConsoleHost") {
+        [System.Console]::Out.Flush()
+    }
+}
+
+function Start-ProgressStep {
+    param([string]$StepName)
+
+    $Global:ProgressStep++
+    $percentComplete = [math]::Round(($Global:ProgressStep / $Global:TotalSteps) * 100)
+    Write-LogProgress "===== STEP $($Global:ProgressStep)/$($Global:TotalSteps) ($percentComplete%): $StepName =====" "Info"
+}
 
 function Add-RebootReason {
     param([string]$Reason)
     $Global:RebootReasons += $Reason
     $Global:RestartRequired = $true
+    Write-LogProgress "Reboot Required: $Reason" "Warning"
 }
 
 # Storage helper functions
@@ -191,15 +225,22 @@ function Get-MediaType {
 function Get-NICDetails {
     $nicInfo = @()
 
-    $adapters = Get-NetAdapter | Where-Object {
-        $_.Virtual -eq $false -and
-        $_.InterfaceDescription -notlike "*Virtual*" -and
-        $_.InterfaceDescription -notlike "*Hyper-V*" -and
-        $_.DriverFileName -notlike "usb*"
+    Write-LogProgress "Enumerating network adapters..." "Debug"
+    try {
+        $adapters = Get-NetAdapter -ErrorAction Stop | Where-Object {
+            $_.Virtual -eq $false -and
+            $_.InterfaceDescription -notlike "*Virtual*" -and
+            $_.InterfaceDescription -notlike "*Hyper-V*" -and
+            $_.DriverFileName -notlike "usb*"
+        }
+        Write-LogProgress "Found $($adapters.Count) physical network adapters" "Debug"
+    } catch {
+        Write-LogProgress "Error enumerating network adapters: $_" "Warning"
+        return $nicInfo
     }
 
     foreach ($adapter in $adapters) {
-        $pnpDevice = Get-PnpDevice | Where-Object { $_.FriendlyName -eq $adapter.InterfaceDescription }
+        $pnpDevice = Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -eq $adapter.InterfaceDescription }
 
         $locationPath = $pnpDevice.LocationInfo
         $busNumber = "Unknown"
@@ -237,25 +278,28 @@ function Get-NICDetails {
 Start-Transcript -Path $LogFile
 
 try {
-    Write-Host "========================================" -ForegroundColor Green
-    Write-Host "Starting $ScriptLogName" -ForegroundColor Green
-    Write-Host "========================================" -ForegroundColor Green
-    Write-Host "Description: $Description"
-    Write-Host "Log Path: $LogFile"
-    Write-Host "RMM Mode: $(if ($RMM -eq 1) { 'Yes' } else { 'No' })"
-    Write-Host "Company Name: $CompanyName"
-    Write-Host "Server Sequence: $ServerSequence"
-    Write-Host "New Computer Name: $NewComputerName"
-    Write-Host "Current Computer Name: $env:COMPUTERNAME"
-    Write-Host ""
-    Write-Host "Configuration Options:" -ForegroundColor Yellow
-    Write-Host "  Skip Windows Update: $SkipWindowsUpdate"
-    Write-Host "  Skip BitLocker: $SkipBitLocker"
-    Write-Host "  Skip Network Teaming: $SkipNetworkTeaming"
-    Write-Host "  NICs per Team: $TeamsOf"
-    Write-Host "  Auto NIC Teaming: $AutoNICTeaming"
-    Write-Host "  Storage Redundancy: $StorageRedundancy"
-    Write-Host ""
+    Write-LogProgress "========================================" "Success"
+    Write-LogProgress "Starting $ScriptLogName v$ScriptVersion" "Success"
+    Write-LogProgress "========================================" "Success"
+    Write-LogProgress "Script Start Time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" "Info"
+    Write-LogProgress "PowerShell Version: $($PSVersionTable.PSVersion)" "Debug"
+    Write-LogProgress "OS Version: $([System.Environment]::OSVersion.VersionString)" "Debug"
+    Write-LogProgress "Description: $Description" "Info"
+    Write-LogProgress "Log Path: $LogFile" "Info"
+    Write-LogProgress "RMM Mode: $(if ($RMM -eq 1) { 'Yes' } else { 'No' })" "Info"
+    Write-LogProgress "Company Name: $CompanyName" "Info"
+    Write-LogProgress "Server Sequence: $ServerSequence" "Info"
+    Write-LogProgress "New Computer Name: $NewComputerName" "Info"
+    Write-LogProgress "Current Computer Name: $env:COMPUTERNAME" "Info"
+    Write-LogProgress "" "Info"
+    Write-LogProgress "Configuration Options:" "Info"
+    Write-LogProgress "  Skip Windows Update: $SkipWindowsUpdate" "Info"
+    Write-LogProgress "  Skip BitLocker: $SkipBitLocker" "Info"
+    Write-LogProgress "  Skip Network Teaming: $SkipNetworkTeaming" "Info"
+    Write-LogProgress "  NICs per Team: $TeamsOf" "Info"
+    Write-LogProgress "  Auto NIC Teaming: $AutoNICTeaming" "Info"
+    Write-LogProgress "  Storage Redundancy: $StorageRedundancy" "Info"
+    Write-LogProgress "" "Info"
 
     # ============================================================================
     # PHASE 1: INSTALL EVERYTHING THAT REQUIRES REBOOTS
@@ -267,17 +311,17 @@ try {
     Write-Host ""
 
     #region Step 1: Rename Computer (Requires Reboot)
-    Write-Host "Step 1: Computer Naming Configuration..." -ForegroundColor Cyan
+    Start-ProgressStep "Computer Naming Configuration"
 
     if ($env:COMPUTERNAME -ne $NewComputerName) {
-        Write-Host "Renaming computer from '$env:COMPUTERNAME' to '$NewComputerName'..."
+        Write-LogProgress "Renaming computer from '$env:COMPUTERNAME' to '$NewComputerName'..." "Info"
 
         try {
             Rename-Computer -NewName $NewComputerName -Force -ErrorAction Stop
-            Write-Host "Computer renamed successfully to '$NewComputerName'" -ForegroundColor Green
+            Write-LogProgress "Computer renamed successfully to '$NewComputerName'" "Success"
             Add-RebootReason "Computer rename to $NewComputerName"
         } catch {
-            Write-Host "Failed to rename computer: $_" -ForegroundColor Red
+            Write-LogProgress "Failed to rename computer: $_" "Error"
             if ($RMM -ne 1) {
                 $continue = Read-Host "Failed to rename computer. Continue anyway? (y/n)"
                 if ($continue -ne 'y') {
@@ -286,26 +330,33 @@ try {
             }
         }
     } else {
-        Write-Host "Computer name already set to '$NewComputerName'" -ForegroundColor Green
+        Write-LogProgress "Computer name already set to '$NewComputerName'" "Success"
     }
     #endregion
 
     #region Step 2: Install ALL Windows Features and Roles (Many Require Reboots)
-    Write-Host ""
-    Write-Host "Step 2: Installing ALL Windows Features and Roles..." -ForegroundColor Cyan
-    Write-Host "This includes Hyper-V and related components that require reboots" -ForegroundColor Yellow
+    Start-ProgressStep "Windows Features and Roles Installation"
+    Write-LogProgress "This includes Hyper-V and related components that require reboots" "Warning"
 
     # Core Hyper-V installation
-    $hyperV = Get-WindowsFeature -Name Hyper-V
+    Write-LogProgress "Checking Hyper-V feature status (this may take 10-30 seconds)..." "Info"
+    try {
+        $hyperV = Get-WindowsFeature -Name Hyper-V
+        Write-LogProgress "Get-WindowsFeature completed. Install state: $($hyperV.InstallState)" "Debug"
+    } catch {
+        Write-LogProgress "Failed to check Hyper-V feature: $_" "Error"
+        throw "Cannot check Windows Features - Component Store may be corrupted"
+    }
+
     if ($hyperV.InstallState -ne "Installed") {
-        Write-Host "Installing Hyper-V Role (REQUIRES REBOOT)..."
+        Write-LogProgress "Installing Hyper-V Role (REQUIRES REBOOT)..." "Info"
         $result = Install-WindowsFeature -Name Hyper-V -IncludeManagementTools -IncludeAllSubFeature -Restart:$false
         if ($result.RestartNeeded -eq "Yes") {
             Add-RebootReason "Hyper-V Role Installation"
         }
-        Write-Host "Hyper-V installed successfully" -ForegroundColor Green
+        Write-LogProgress "Hyper-V installed successfully" "Success"
     } else {
-        Write-Host "Hyper-V already installed" -ForegroundColor Green
+        Write-LogProgress "Hyper-V already installed" "Success"
     }
 
     # Install ALL other features we need upfront
@@ -344,13 +395,25 @@ try {
     #endregion
 
     #region Step 3: Install OEM Management Tools (May Require Reboot)
-    Write-Host ""
-    Write-Host "Step 3: Installing OEM Management Tools..." -ForegroundColor Cyan
+    Start-ProgressStep "OEM Management Tools Installation"
 
-    $Manufacturer = Get-CimInstance -ClassName Win32_ComputerSystem | Select-Object -ExpandProperty Manufacturer
+    Write-LogProgress "Detecting hardware manufacturer (querying WMI)..." "Info"
+    try {
+        $Manufacturer = Get-CimInstance -ClassName Win32_ComputerSystem -OperationTimeoutSec 30 | Select-Object -ExpandProperty Manufacturer
+        Write-LogProgress "Hardware manufacturer detected: $Manufacturer" "Debug"
+    } catch {
+        Write-LogProgress "Failed to detect manufacturer via CIM, trying WMI..." "Warning"
+        try {
+            $Manufacturer = (Get-WmiObject -Class Win32_ComputerSystem -ErrorAction Stop).Manufacturer
+            Write-LogProgress "Hardware manufacturer detected via WMI: $Manufacturer" "Debug"
+        } catch {
+            Write-LogProgress "Cannot detect hardware manufacturer: $_" "Error"
+            $Manufacturer = "Unknown"
+        }
+    }
 
     if ($Manufacturer -like "Dell*") {
-        Write-Host "Dell hardware detected - installing Dell OpenManage and tools"
+        Write-LogProgress "Dell hardware detected - installing Dell OpenManage and tools" "Info"
 
         # Check if already installed
         $omsaInstalled = Test-Path "C:\Program Files\Dell\SysMgt\oma\bin"
@@ -431,9 +494,29 @@ try {
                                 Write-Host "  PERCCLI installed" -ForegroundColor Green
                             }
                         } else {
-                            Write-Host "  Installing $($download.Name)..."
-                            Start-Process -FilePath $download.File -ArgumentList $download.Args -Wait -NoNewWindow
-                            Write-Host "  $($download.Name) installed" -ForegroundColor Green
+                            Write-LogProgress "  Installing $($download.Name) (may take 2-5 minutes)..." "Info"
+
+                            # Start installer with timeout
+                            $process = Start-Process -FilePath $download.File -ArgumentList $download.Args -PassThru -NoNewWindow
+                            $timeoutSeconds = 300  # 5 minute timeout
+                            $waited = 0
+
+                            while (!$process.HasExited -and $waited -lt $timeoutSeconds) {
+                                Start-Sleep -Seconds 5
+                                $waited += 5
+                                if ($waited % 30 -eq 0) {
+                                    Write-LogProgress "    Still installing... ($waited seconds elapsed)" "Debug"
+                                }
+                            }
+
+                            if (!$process.HasExited) {
+                                Write-LogProgress "    Installation timeout after $timeoutSeconds seconds" "Warning"
+                                $process | Stop-Process -Force -ErrorAction SilentlyContinue
+                            } elseif ($process.ExitCode -eq 0) {
+                                Write-LogProgress "  $($download.Name) installed successfully" "Success"
+                            } else {
+                                Write-LogProgress "  $($download.Name) installer returned exit code: $($process.ExitCode)" "Warning"
+                            }
                         }
                     } catch {
                         Write-Host "  Failed to install $($download.Name): $_" -ForegroundColor Yellow
@@ -471,21 +554,27 @@ try {
 
     #region Step 4: Windows Updates (Requires Reboot)
     if (!$SkipWindowsUpdate) {
-        Write-Host ""
-        Write-Host "Step 4: Installing Windows Updates..." -ForegroundColor Cyan
-        Write-Host "This typically requires a reboot" -ForegroundColor Yellow
+        Start-ProgressStep "Windows Updates Installation"
+        Write-LogProgress "This typically requires a reboot" "Warning"
 
         try {
             # Ensure NuGet and PSWindowsUpdate are installed
+            Write-LogProgress "Checking for NuGet package provider..." "Info"
             if (!(Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)) {
+                Write-LogProgress "Installing NuGet provider (this may hang for 30-60 seconds on first run)..." "Info"
                 Install-PackageProvider -Name NuGet -Force -Confirm:$false | Out-Null
+                Write-LogProgress "NuGet provider installed" "Success"
             }
 
+            Write-LogProgress "Checking for PSWindowsUpdate module..." "Info"
             if (!(Get-Module -ListAvailable -Name PSWindowsUpdate)) {
+                Write-LogProgress "Installing PSWindowsUpdate module (may take 1-2 minutes)..." "Info"
                 Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted
                 Install-Module PSWindowsUpdate -Force -Confirm:$false | Out-Null
+                Write-LogProgress "PSWindowsUpdate module installed" "Success"
             }
 
+            Write-LogProgress "Importing PSWindowsUpdate module..." "Info"
             Import-Module PSWindowsUpdate
 
             Write-Host "Checking for updates..."
@@ -562,23 +651,24 @@ try {
     Write-Host ""
 
     #region Step 5: Storage Configuration
-    Write-Host "Step 5: Configuring Storage..." -ForegroundColor Cyan
+    Start-ProgressStep "Storage Configuration"
 
     # Check RAID configuration if Dell with PERCCLI
     if ($perccliPath) {
-        Write-Host "Checking RAID configuration with PERCCLI..."
+        Write-LogProgress "Checking RAID configuration with PERCCLI..." "Info"
         try {
             $raidInfo = & $perccliPath /c0 show
             # Log RAID info but don't block on it
-            Write-Host "RAID configuration detected" -ForegroundColor Green
+            Write-LogProgress "RAID configuration detected" "Success"
         } catch {
-            Write-Host "Could not query RAID configuration" -ForegroundColor Yellow
+            Write-LogProgress "Could not query RAID configuration: $_" "Warning"
         }
     }
 
     # Get all disks and analyze
-    $allDisks = Get-Disk | Sort-Object Number
-    Write-Host "Found $($allDisks.Count) disk(s)"
+    Write-LogProgress "Enumerating storage disks..." "Info"
+    $allDisks = Get-Disk -ErrorAction SilentlyContinue | Sort-Object Number
+    Write-LogProgress "Found $($allDisks.Count) disk(s)" "Info"
 
     # Get all volumes to check for existing configuration
     $allVolumes = Get-Volume | Where-Object { $_.DriveLetter -ne $null }
@@ -790,8 +880,7 @@ try {
     #endregion
 
     #region Step 6: Configure Hyper-V Settings
-    Write-Host ""
-    Write-Host "Step 6: Configuring Hyper-V Settings..." -ForegroundColor Cyan
+    Start-ProgressStep "Hyper-V Settings Configuration"
 
     # Configure Hyper-V storage paths
     $dataDrive = Get-Volume | Where-Object { $_.DriveLetter -ne 'C' -and $_.DriveLetter -ne $null } |
@@ -829,8 +918,7 @@ try {
 
     #region Step 7: Configure Network Teaming
     if (!$SkipNetworkTeaming) {
-        Write-Host ""
-        Write-Host "Step 7: Configuring Network Teaming..." -ForegroundColor Cyan
+        Start-ProgressStep "Network Teaming Configuration"
 
         # Clean up any existing virtual switches
         Get-VMSwitch -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "SET*" } | Remove-VMSwitch -Force -ErrorAction SilentlyContinue
@@ -912,8 +1000,7 @@ try {
     #endregion
 
     #region Step 8: Configure Windows Settings
-    Write-Host ""
-    Write-Host "Step 8: Configuring Windows Settings..." -ForegroundColor Cyan
+    Start-ProgressStep "Windows Settings Configuration"
 
     # Disable Server Manager auto-start
     Get-ScheduledTask -TaskName ServerManager -ErrorAction SilentlyContinue | Disable-ScheduledTask -ErrorAction SilentlyContinue | Out-Null
@@ -939,8 +1026,7 @@ try {
     #endregion
 
     #region Step 9: Install Management Applications
-    Write-Host ""
-    Write-Host "Step 9: Installing Management Applications..." -ForegroundColor Cyan
+    Start-ProgressStep "Management Applications Installation"
 
     # Check for WinGet
     $wingetPath = Get-Command winget -ErrorAction SilentlyContinue
@@ -966,8 +1052,7 @@ try {
 
     #region Step 10: Configure BitLocker (Optional)
     if (!$SkipBitLocker) {
-        Write-Host ""
-        Write-Host "Step 10: Configuring BitLocker..." -ForegroundColor Cyan
+        Start-ProgressStep "BitLocker Configuration"
 
         $tpm = Get-WmiObject -Namespace "Root\CIMv2\Security\MicrosoftTpm" -Class Win32_Tpm -ErrorAction SilentlyContinue
         if ($tpm) {
