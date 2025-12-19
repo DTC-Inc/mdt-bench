@@ -1,8 +1,0 @@
-& "$PsScriptRoot\workstations\windows-config.ps1"
-& "$PsScriptRoot\workstations\deploy-oem-tools.ps1"
-& "$PsScriptRoot\workstations\deploy-apps.ps1"
-# & "$PsScriptRoot\debloat-windows-10\scripts\remove-default-apps.ps1"
-# & "$PsScriptRoot\debloat-windows-10\scripts\remove-onedrive.ps1"
-& "$PsScriptRoot\rmm\deploy-automate.ps1"
-& "$PsScriptRoot\bitlocker.ps1"
-& "$PsScriptRoot\update-windows.ps1"
