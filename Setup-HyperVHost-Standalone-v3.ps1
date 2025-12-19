@@ -358,53 +358,88 @@ try {
         if (!$omsaInstalled) {
             Write-Host "Dell OpenManage not found, installing..."
 
-            # Download URLs for Dell tools
+            # Download URLs for Dell tools - Using Backblaze B2 public bucket
+            # Primary URLs from B2 S3-compatible endpoint, with Dell direct links as fallback
             $downloads = @(
                 @{
                     Name = "OpenManage Server Administrator"
-                    Url = "https://dl.dell.com/FOLDER11337880M/1/Windows_OMSA_11.0.1.0_A00.exe"
+                    Urls = @(
+                        "https://public-dtc.s3.us-west-002.backblazeb2.com/repo/vendors/dell/OM-SrvAdmin-Dell-Web-WINX64-11.0.1.0-5494_A00.exe",
+                        "https://dl.dell.com/FOLDER11337880M/1/Windows_OMSA_11.0.1.0_A00.exe"
+                    )
                     File = "$env:WINDIR\temp\OMSA_Setup.exe"
                     Args = "/s"
                 },
                 @{
-                    Name = "iDRAC Service Module"
-                    Url = "https://dl.dell.com/FOLDER11034445M/1/iDRAC-Service-Module-5.3.0.0_Windows_x64.exe"
+                    Name = "iDRAC Tools"
+                    Urls = @(
+                        "https://public-dtc.s3.us-west-002.backblazeb2.com/repo/vendors/dell/Dell-iDRACTools-Web-WINX64-11.4.0.0-1435_A00.exe",
+                        "https://dl.dell.com/FOLDER11034445M/1/iDRAC-Service-Module-5.3.0.0_Windows_x64.exe"
+                    )
                     File = "$env:WINDIR\temp\ISM_Setup.exe"
                     Args = "/s"
                 },
                 @{
                     Name = "Dell System Update"
-                    Url = "https://dl.dell.com/FOLDER11689994M/1/Systems-Management_Application_NVD8W_WN64_2.0.2.3_A00.EXE"
+                    Urls = @(
+                        "https://public-dtc.s3.us-west-002.backblazeb2.com/repo/vendors/dell/Systems-Management_Application_W7K0J_WN64_2.1.2.0_A01.EXE",
+                        "https://dl.dell.com/FOLDER11689994M/1/Systems-Management_Application_NVD8W_WN64_2.0.2.3_A00.EXE"
+                    )
                     File = "$env:WINDIR\temp\DSU_Setup.exe"
                     Args = "/s"
                 },
                 @{
                     Name = "Dell PERCCLI"
-                    Url = "https://dl.dell.com/FOLDER09766599M/1/PERCCLI_7.2313.0_A16_Windows.zip"
+                    Urls = @(
+                        "https://dl.dell.com/FOLDER09766599M/1/PERCCLI_7.2313.0_A16_Windows.zip"
+                    )
                     File = "$env:WINDIR\temp\perccli.zip"
                     Args = $null
                 }
             )
 
             foreach ($download in $downloads) {
-                try {
-                    Write-Host "  Downloading $($download.Name)..."
-                    Invoke-WebRequest -Uri $download.Url -OutFile $download.File -UseBasicParsing
+                $downloadSuccess = $false
 
-                    if ($download.File -like "*.zip") {
-                        # Extract PERCCLI
-                        Expand-Archive -Path $download.File -DestinationPath "$env:WINDIR\temp\perccli" -Force
-                        $perccliExe = Get-ChildItem -Path "$env:WINDIR\temp\perccli" -Filter "perccli64.exe" -Recurse | Select-Object -First 1
-                        if ($perccliExe) {
-                            Copy-Item $perccliExe.FullName -Destination "C:\Program Files\Dell\perccli64.exe" -Force
-                            Write-Host "  PERCCLI installed" -ForegroundColor Green
-                        }
-                    } else {
-                        Write-Host "  Installing $($download.Name)..."
-                        Start-Process -FilePath $download.File -ArgumentList $download.Args -Wait -NoNewWindow
+                # Try each URL in order until one succeeds
+                foreach ($url in $download.Urls) {
+                    try {
+                        Write-Host "  Downloading $($download.Name)..."
+                        Write-Host "    Trying: $url" -ForegroundColor Gray
+                        Invoke-WebRequest -Uri $url -OutFile $download.File -UseBasicParsing -ErrorAction Stop
+                        $downloadSuccess = $true
+                        Write-Host "    Download successful" -ForegroundColor Green
+                        break
+                    } catch {
+                        Write-Host "    Failed: $_" -ForegroundColor Yellow
+                        continue
                     }
-                } catch {
-                    Write-Host "  Failed to install $($download.Name): $_" -ForegroundColor Yellow
+                }
+
+                if ($downloadSuccess) {
+                    try {
+                        if ($download.File -like "*.zip") {
+                            # Extract PERCCLI
+                            Expand-Archive -Path $download.File -DestinationPath "$env:WINDIR\temp\perccli" -Force
+                            $perccliExe = Get-ChildItem -Path "$env:WINDIR\temp\perccli" -Filter "perccli64.exe" -Recurse | Select-Object -First 1
+                            if ($perccliExe) {
+                                # Create Dell directory if it doesn't exist
+                                if (!(Test-Path "C:\Program Files\Dell")) {
+                                    New-Item -Path "C:\Program Files\Dell" -ItemType Directory -Force | Out-Null
+                                }
+                                Copy-Item $perccliExe.FullName -Destination "C:\Program Files\Dell\perccli64.exe" -Force
+                                Write-Host "  PERCCLI installed" -ForegroundColor Green
+                            }
+                        } else {
+                            Write-Host "  Installing $($download.Name)..."
+                            Start-Process -FilePath $download.File -ArgumentList $download.Args -Wait -NoNewWindow
+                            Write-Host "  $($download.Name) installed" -ForegroundColor Green
+                        }
+                    } catch {
+                        Write-Host "  Failed to install $($download.Name): $_" -ForegroundColor Yellow
+                    }
+                } else {
+                    Write-Host "  Failed to download $($download.Name) from all sources" -ForegroundColor Red
                 }
             }
 
