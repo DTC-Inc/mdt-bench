@@ -648,7 +648,7 @@ try {
                  Select-Object -First 1 -ExpandProperty DriveLetter
 
     if ($dataDrive) {
-        Write-Host "Configuring Hyper-V to use $dataDrive: drive for VM storage..."
+        Write-Host "Configuring Hyper-V to use ${dataDrive}: drive for VM storage..."
 
         # Create directory structure
         $paths = @(
@@ -722,7 +722,7 @@ try {
                             Write-Host "Created SET$teamNumber successfully" -ForegroundColor Green
                             $teamNumber++
                         } catch {
-                            Write-Host "Failed to create SET$teamNumber: $_" -ForegroundColor Yellow
+                            Write-Host "Failed to create SET${teamNumber}: $_" -ForegroundColor Yellow
                         }
                     }
                 }
