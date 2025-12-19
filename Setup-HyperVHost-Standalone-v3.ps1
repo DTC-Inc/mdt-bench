@@ -545,23 +545,138 @@ try {
     $allDisks = Get-Disk | Sort-Object Number
     Write-Host "Found $($allDisks.Count) disk(s)"
 
-    # Check for RAID configuration issues
-    $raidDisks = $allDisks | Where-Object { $_.Model -match "PERC|RAID|Virtual" }
+    # Get all volumes to check for existing configuration
+    $allVolumes = Get-Volume | Where-Object { $_.DriveLetter -ne $null }
+    $osVolume = $allVolumes | Where-Object { $_.DriveLetter -eq 'C' }
+    $dataVolumes = $allVolumes | Where-Object { $_.DriveLetter -ne 'C' -and $_.DriveType -eq 'Fixed' }
 
-    if ($raidDisks.Count -eq 1) {
+    # Check for RAID configuration issues
+    $raidDisks = $allDisks | Where-Object { $_.Model -match "PERC|RAID|Virtual|BOSS|MegaRAID" }
+
+    # Critical check: Are OS and Data volumes on the same physical/RAID disk?
+    if ($osVolume -and $dataVolumes.Count -gt 0) {
+        # Get the disk number for the OS
+        $osPartition = Get-Partition -DriveLetter 'C'
+        $osDiskNumber = $osPartition.DiskNumber
+
+        # Check if any data volumes are on the same disk as OS
+        $dataOnSameDisk = @()
+        foreach ($dataVol in $dataVolumes) {
+            try {
+                $dataPartition = Get-Partition -DriveLetter $dataVol.DriveLetter -ErrorAction SilentlyContinue
+                if ($dataPartition -and $dataPartition.DiskNumber -eq $osDiskNumber) {
+                    $dataOnSameDisk += $dataVol.DriveLetter
+                }
+            } catch {
+                # Ignore errors for volumes without partitions
+            }
+        }
+
+        if ($dataOnSameDisk.Count -gt 0) {
+            $diskInfo = Get-Disk -Number $osDiskNumber
+
+            # Check if this is a RAID disk
+            if ($diskInfo.Model -match "PERC|RAID|Virtual|BOSS|MegaRAID") {
+                Write-Host "" -ForegroundColor Red
+                Write-Host "========================================" -ForegroundColor Red
+                Write-Host "CRITICAL: RAID CONFIGURATION ERROR!" -ForegroundColor Red
+                Write-Host "========================================" -ForegroundColor Red
+                Write-Host ""
+                Write-Host "OS (C:) and Data volumes ($($dataOnSameDisk -join ', '):) are on the SAME RAID virtual disk!" -ForegroundColor Red
+                Write-Host "Disk: $($diskInfo.Model) - Size: $([math]::Round($diskInfo.Size/1GB,2)) GB" -ForegroundColor Yellow
+                Write-Host ""
+                Write-Host "This configuration is NOT SUPPORTED for production servers!" -ForegroundColor Red
+                Write-Host "Reasons:" -ForegroundColor Yellow
+                Write-Host "  - Poor I/O performance (OS and Data compete for same RAID resources)" -ForegroundColor Yellow
+                Write-Host "  - Cannot optimize RAID levels separately (OS needs RAID1, Data needs RAID5/6/10)" -ForegroundColor Yellow
+                Write-Host "  - Difficult to expand storage independently" -ForegroundColor Yellow
+                Write-Host "  - Backup/restore complexity" -ForegroundColor Yellow
+                Write-Host ""
+                Write-Host "REQUIRED RAID RECONFIGURATION:" -ForegroundColor Cyan
+                Write-Host "========================================" -ForegroundColor Cyan
+
+                if ($Manufacturer -like "Dell*") {
+                    Write-Host "Dell PERC Controller Instructions:" -ForegroundColor Green
+                    Write-Host "1. Reboot server and press Ctrl+R to enter RAID configuration" -ForegroundColor White
+                    Write-Host "2. Delete the current virtual disk (WARNING: This will destroy all data!)" -ForegroundColor White
+                    Write-Host "3. Create TWO separate virtual disks from the same RAID group:" -ForegroundColor White
+                    Write-Host ""
+                    Write-Host "   Virtual Disk 1 (OS):" -ForegroundColor Cyan
+                    Write-Host "   - Name: OS_VD" -ForegroundColor White
+                    Write-Host "   - Size: 300-500 GB" -ForegroundColor White
+                    Write-Host "   - RAID Level: RAID 1 (using first 2 disks)" -ForegroundColor White
+                    Write-Host "   - Strip Size: 64K" -ForegroundColor White
+                    Write-Host "   - Read Policy: Read Ahead" -ForegroundColor White
+                    Write-Host "   - Write Policy: Write Back" -ForegroundColor White
+                    Write-Host ""
+                    Write-Host "   Virtual Disk 2 (Data):" -ForegroundColor Cyan
+                    Write-Host "   - Name: DATA_VD" -ForegroundColor White
+                    Write-Host "   - Size: Use remaining space" -ForegroundColor White
+                    Write-Host "   - RAID Level: RAID 5/6/10 (using remaining disks)" -ForegroundColor White
+                    Write-Host "   - Strip Size: 256K or 1024K" -ForegroundColor White
+                    Write-Host "   - Read Policy: Read Ahead" -ForegroundColor White
+                    Write-Host "   - Write Policy: Write Back" -ForegroundColor White
+                    Write-Host ""
+                    Write-Host "4. Initialize both virtual disks" -ForegroundColor White
+                    Write-Host "5. Save configuration and reboot" -ForegroundColor White
+                    Write-Host "6. Reinstall Windows Server on Virtual Disk 1" -ForegroundColor White
+                    Write-Host "7. Re-run this script after OS installation" -ForegroundColor White
+                } else {
+                    Write-Host "Generic RAID Controller Instructions:" -ForegroundColor Green
+                    Write-Host "1. Enter RAID configuration utility during boot" -ForegroundColor White
+                    Write-Host "2. Delete current configuration (WARNING: This will destroy all data!)" -ForegroundColor White
+                    Write-Host "3. Create separate virtual disks:" -ForegroundColor White
+                    Write-Host "   - VD1: 300-500GB for OS (RAID 1 recommended)" -ForegroundColor White
+                    Write-Host "   - VD2: Remaining space for Data (RAID 5/6/10)" -ForegroundColor White
+                    Write-Host "4. Reinstall Windows Server on VD1" -ForegroundColor White
+                    Write-Host "5. Re-run this script after OS installation" -ForegroundColor White
+                }
+
+                Write-Host ""
+                Write-Host "========================================" -ForegroundColor Red
+
+                if ($RMM -eq 1) {
+                    Write-Host "EXITING: RAID reconfiguration required!" -ForegroundColor Red
+                    Write-Host "This cannot be fixed remotely via RMM." -ForegroundColor Red
+                    Write-Host "Physical access or IPMI/iDRAC is required to reconfigure RAID." -ForegroundColor Red
+                    exit 1
+                } else {
+                    Write-Host "Do you want to continue anyway? (NOT RECOMMENDED)" -ForegroundColor Yellow
+                    $response = Read-Host "Type 'ACCEPT RISK' to continue with this configuration"
+                    if ($response -ne 'ACCEPT RISK') {
+                        Write-Host "Exiting. Please reconfigure RAID as instructed above." -ForegroundColor Red
+                        exit 1
+                    }
+                    Write-Host "WARNING: Continuing with suboptimal RAID configuration at your own risk!" -ForegroundColor Red
+                }
+            } else {
+                # Non-RAID disk with OS and Data - still not ideal but less critical
+                Write-Host "WARNING: OS and Data volumes are on the same physical disk" -ForegroundColor Yellow
+                Write-Host "Disk: $($diskInfo.Model)" -ForegroundColor Yellow
+                Write-Host "This is not recommended for performance reasons" -ForegroundColor Yellow
+
+                if ($RMM -ne 1) {
+                    $response = Read-Host "Continue with single disk configuration? (y/n)"
+                    if ($response -ne 'y') {
+                        exit 1
+                    }
+                }
+            }
+        }
+    }
+
+    # Original single RAID disk check (for fresh installs)
+    if ($raidDisks.Count -eq 1 -and $dataVolumes.Count -eq 0) {
         $raidDisk = $raidDisks[0]
         $partitions = Get-Partition -DiskNumber $raidDisk.Number -ErrorAction SilentlyContinue
 
-        if ($partitions.Count -gt 2) {
-            Write-Host "WARNING: Single RAID Virtual Disk Configuration Detected!" -ForegroundColor Yellow
-            Write-Host "Current: OS and Data are on the same RAID virtual disk" -ForegroundColor Yellow
-            Write-Host "Recommended: Separate RAID virtual disks for OS and Data" -ForegroundColor Yellow
+        # Check if we're about to create data volumes on the same RAID disk as OS
+        if ($partitions | Where-Object { $_.DriveLetter -eq 'C' }) {
             Write-Host ""
-            Write-Host "To fix this:" -ForegroundColor Cyan
-            Write-Host "1. Boot into RAID controller (Ctrl+R or F2)" -ForegroundColor Cyan
-            Write-Host "2. Delete current virtual disk" -ForegroundColor Cyan
-            Write-Host "3. Create VD1: 2 disks, RAID1, ~500GB for OS" -ForegroundColor Cyan
-            Write-Host "4. Create VD2: Remaining disks, RAID5/6/10 for Data" -ForegroundColor Cyan
+            Write-Host "WARNING: Single RAID Virtual Disk Configuration Detected!" -ForegroundColor Yellow
+            Write-Host "OS is on a RAID disk, and no separate data disks are available" -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "Recommended: Create separate RAID virtual disks (see instructions above)" -ForegroundColor Cyan
             Write-Host ""
 
             if ($RMM -eq 1) {
@@ -572,7 +687,7 @@ try {
                 }
                 Write-Host "Continuing with single RAID disk (AcceptRAIDWarning=true)" -ForegroundColor Yellow
             } else {
-                $response = Read-Host "Continue with suboptimal configuration? (y/n)"
+                $response = Read-Host "Continue without separate RAID virtual disks? (y/n)"
                 if ($response -ne 'y') {
                     throw "Please reconfigure RAID and re-run setup"
                 }
