@@ -376,20 +376,42 @@ try {
             if (-not $perccliPath) {
                 Write-Log "PERCCLI not found, downloading..." -Level "Info"
                 try {
-                    $perccliUrl = "https://dl.dell.com/FOLDER08939165M/1/PERCCLI_7.2110.00_A14_Windows.zip"
+                    # Try multiple URLs for PERCCLI
+                    $perccliUrls = @(
+                        "https://dl.dell.com/FOLDER09766599M/1/PERCCLI_7.2313.0_A16_Windows.zip",  # Latest as of 2024
+                        "https://dl.dell.com/FOLDER08939165M/1/PERCCLI_7.2110.00_A14_Windows.zip",
+                        "https://dl.dell.com/FOLDER07815522M/1/PERCCLI_7.1910.00_A13_Windows.zip"
+                    )
+
+                    $downloadSuccess = $false
                     $zipPath = "$env:windir\temp\perccli.zip"
 
-                    $wc = New-Object System.Net.WebClient
-                    $wc.DownloadFile($perccliUrl, $zipPath)
+                    foreach ($url in $perccliUrls) {
+                        try {
+                            Write-Log "Trying URL: $url" -Level "Info"
+                            $wc = New-Object System.Net.WebClient
+                            $wc.DownloadFile($url, $zipPath)
+                            $downloadSuccess = $true
+                            Write-Log "Download successful from: $url" -Level "Info"
+                            break
+                        } catch {
+                            Write-Log "Failed to download from $url : $_" -Level "Warning"
+                        }
+                    }
 
-                    # Extract PERCCLI
-                    Expand-Archive -Path $zipPath -DestinationPath "$env:windir\temp\perccli" -Force
-                    $perccliPath = Get-ChildItem "$env:windir\temp\perccli" -Recurse -Filter "perccli64.exe" | Select-Object -First 1 -ExpandProperty FullName
+                    if ($downloadSuccess) {
+                        # Extract PERCCLI
+                        Expand-Archive -Path $zipPath -DestinationPath "$env:windir\temp\perccli" -Force
+                        $perccliPath = Get-ChildItem "$env:windir\temp\perccli" -Recurse -Filter "perccli64.exe" | Select-Object -First 1 -ExpandProperty FullName
 
-                    if ($perccliPath) {
-                        Copy-Item $perccliPath "$env:windir\temp\perccli64.exe" -Force
-                        $perccliPath = "$env:windir\temp\perccli64.exe"
-                        Write-Log "PERCCLI downloaded and extracted" -Level "Info"
+                        if ($perccliPath) {
+                            Copy-Item $perccliPath "$env:windir\temp\perccli64.exe" -Force
+                            $perccliPath = "$env:windir\temp\perccli64.exe"
+                            Write-Log "PERCCLI downloaded and extracted" -Level "Info"
+                        }
+                    } else {
+                        Write-Log "Could not download PERCCLI from any source" -Level "Warning"
+                        Write-Log "Please install Dell OpenManage Server Administrator for RAID management" -Level "Warning"
                     }
                 } catch {
                     Write-Log "Could not download PERCCLI: $_" -Level "Warning"
@@ -447,6 +469,42 @@ try {
             Write-Host "$icon Disk $($disk.Number): $($disk.Model) - $sizeGB GB ($mediaType)$bootLabel" -ForegroundColor $(if($disk.IsBoot){"Yellow"}else{"White"})
         }
 
+        # Check for RAID configuration issues
+        $raidDisks = $allDisks | Where-Object { $_.Model -match "PERC|RAID|Virtual" }
+        $needsRaidReconfig = $false
+
+        if ($raidDisks.Count -eq 1 -and $perccliPath) {
+            # Single RAID virtual disk detected - check if it has both OS and data
+            $raidDisk = $raidDisks[0]
+            $partitions = Get-Partition -DiskNumber $raidDisk.Number -ErrorAction SilentlyContinue
+
+            if ($partitions.Count -gt 2) {  # More than just system/boot partitions
+                Write-Host "`n⚠️  WARNING: Single RAID Virtual Disk Configuration Detected!" -ForegroundColor Red
+                Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
+                Write-Host "Current: OS and Data are on the same RAID virtual disk" -ForegroundColor Yellow
+                Write-Host "Recommended: Separate RAID virtual disks for OS and Data" -ForegroundColor Green
+                Write-Host "" -ForegroundColor White
+                Write-Host "For optimal Hyper-V performance, reconfigure RAID as follows:" -ForegroundColor White
+                Write-Host "  1. Create RAID 1 virtual disk (2 drives) for OS - ~300-500GB" -ForegroundColor Cyan
+                Write-Host "  2. Create RAID 10 or RAID 5 virtual disk for Data/VMs" -ForegroundColor Cyan
+                Write-Host "" -ForegroundColor White
+                Write-Host "To reconfigure RAID:" -ForegroundColor Yellow
+                Write-Host "  1. Restart server and enter RAID controller (Ctrl+R or F2)" -ForegroundColor White
+                Write-Host "  2. Delete existing virtual disk (WARNING: Data loss!)" -ForegroundColor Red
+                Write-Host "  3. Create two new virtual disks as described above" -ForegroundColor White
+                Write-Host "  4. Reinstall Windows on the first virtual disk" -ForegroundColor White
+                Write-Host "  5. Re-run this script" -ForegroundColor White
+                Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
+
+                $continueAnyway = Read-Host "`nContinue with suboptimal configuration? (y/n)"
+                if ($continueAnyway -ne 'y') {
+                    Write-Log "Setup cancelled for RAID reconfiguration" -Level "Warning"
+                    throw "Please reconfigure RAID and re-run setup"
+                }
+                $needsRaidReconfig = $true
+            }
+        }
+
         # Determine storage configuration strategy
         Write-Host "`n🎯 Storage Configuration Strategy:" -ForegroundColor Green
 
@@ -458,28 +516,73 @@ try {
             Write-Host "   Boot Disk: Disk $($bootDisk.Number) - $($bootDisk.Model)" -ForegroundColor White
 
             # Expand OS partition on BOSS
-            Write-Log "Expanding OS partition on BOSS disk..." -Level "Info"
-            $maxSize = (Get-PartitionSupportedSize -DriveLetter C).sizeMax
-            Resize-Partition -DriveLetter C -Size $maxSize
+            Write-Log "Checking OS partition on BOSS disk..." -Level "Info"
+            try {
+                $currentSize = (Get-Partition -DriveLetter C).Size
+                $maxSize = (Get-PartitionSupportedSize -DriveLetter C).SizeMax
+
+                if ($currentSize -lt ($maxSize - 1GB)) {  # Only resize if more than 1GB available
+                    Write-Log "Expanding OS partition from $([math]::Round($currentSize/1GB,2))GB to $([math]::Round($maxSize/1GB,2))GB..." -Level "Info"
+                    Resize-Partition -DriveLetter C -Size $maxSize
+                    Write-Log "OS partition expanded successfully" -Level "Success"
+                } else {
+                    Write-Log "OS partition already at maximum size ($([math]::Round($currentSize/1GB,2))GB)" -Level "Info"
+                }
+            } catch {
+                Write-Log "Could not resize OS partition: $_" -Level "Warning"
+            }
         } elseif ($bootDisk) {
             Write-Host "✅ Standard boot disk configuration" -ForegroundColor Green
             Write-Host "   Boot Disk: Disk $($bootDisk.Number) - $($bootDisk.Model)" -ForegroundColor White
 
             # Check if we should split the boot disk
             $bootDiskSizeGB = [math]::Round($bootDisk.Size / 1GB, 2)
-            if ($bootDiskSizeGB -gt 500 -and $dataDisks.Count -eq 0) {
-                Write-Host "⚠️  Large boot disk with no data disks - will partition for data" -ForegroundColor Yellow
+            if ($bootDiskSizeGB -gt 500 -and $dataDisks.Count -eq 0 -and -not $needsRaidReconfig) {
+                Write-Host "⚠️  Large boot disk with no data disks - checking partition options" -ForegroundColor Yellow
 
-                # Resize OS partition to 120GB if large disk
-                Resize-Partition -DriveLetter C -Size 120GB
+                try {
+                    $osPartition = Get-Partition -DriveLetter C
+                    $currentSizeGB = [math]::Round($osPartition.Size / 1GB, 2)
 
-                # Create data partition on remaining space
-                $dataPart = New-Partition -DiskNumber $bootDisk.Number -UseMaximumSize -AssignDriveLetter
-                Format-Volume -DriveLetter $dataPart.DriveLetter -FileSystem NTFS -AllocationUnitSize 1024 -NewFileSystemLabel "$($Config.StorageRedundancy)-ssd-01"
+                    # Check if there's unallocated space on the disk
+                    $unallocatedSpace = $bootDisk.Size - (Get-Partition -DiskNumber $bootDisk.Number | Measure-Object -Property Size -Sum).Sum
+
+                    if ($unallocatedSpace -gt 100GB) {
+                        Write-Log "Found $([math]::Round($unallocatedSpace/1GB,2))GB unallocated space" -Level "Info"
+                        # Create data partition on unallocated space
+                        $dataPart = New-Partition -DiskNumber $bootDisk.Number -UseMaximumSize -AssignDriveLetter
+                        Format-Volume -DriveLetter $dataPart.DriveLetter -FileSystem NTFS -AllocationUnitSize 1024 -NewFileSystemLabel "$($Config.StorageRedundancy)-ssd-01"
+                        Write-Log "Created data partition on unallocated space" -Level "Success"
+                    } elseif ($currentSizeGB -gt 150) {
+                        Write-Host "   OS partition is $currentSizeGB GB - would need to shrink for data partition" -ForegroundColor Yellow
+                        $shrink = Read-Host "   Shrink OS partition to 120GB and create data partition? (y/n)"
+                        if ($shrink -eq 'y') {
+                            # This requires more complex operations - typically done offline
+                            Write-Log "Partition shrinking requires offline operation" -Level "Warning"
+                            Write-Host "   Please use Disk Management to shrink C: drive manually" -ForegroundColor Yellow
+                        }
+                    } else {
+                        Write-Log "OS partition size is appropriate ($currentSizeGB GB)" -Level "Info"
+                    }
+                } catch {
+                    Write-Log "Could not analyze partition layout: $_" -Level "Warning"
+                }
             } else {
-                # Just expand OS partition
-                $maxSize = (Get-PartitionSupportedSize -DriveLetter C).sizeMax
-                Resize-Partition -DriveLetter C -Size $maxSize
+                # Just try to expand OS partition if needed
+                try {
+                    $currentSize = (Get-Partition -DriveLetter C).Size
+                    $maxSize = (Get-PartitionSupportedSize -DriveLetter C).SizeMax
+
+                    if ($currentSize -lt ($maxSize - 1GB)) {  # Only resize if more than 1GB available
+                        Write-Log "Expanding OS partition..." -Level "Info"
+                        Resize-Partition -DriveLetter C -Size $maxSize
+                        Write-Log "OS partition expanded successfully" -Level "Success"
+                    } else {
+                        Write-Log "OS partition already at maximum size" -Level "Info"
+                    }
+                } catch {
+                    Write-Log "Could not resize OS partition: $_" -Level "Warning"
+                }
             }
         }
 
