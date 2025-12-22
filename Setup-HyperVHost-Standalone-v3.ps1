@@ -386,7 +386,9 @@ try {
         @{Name = "RSAT-Hyper-V-Tools"; Description = "Hyper-V Management Tools"},
         @{Name = "Hyper-V-PowerShell"; Description = "Hyper-V PowerShell Module"},
         @{Name = "Windows-Defender"; Description = "Windows Defender"},
-        @{Name = "Multipath-IO"; Description = "MPIO for Storage"}
+        @{Name = "Multipath-IO"; Description = "MPIO for Storage"},
+        @{Name = "BitLocker"; Description = "BitLocker Drive Encryption"},
+        @{Name = "RSAT-Feature-Tools-BitLocker"; Description = "BitLocker Administration Utilities"}
     )
 
     $featuresNeedingReboot = @()
@@ -879,24 +881,75 @@ try {
     if ($bootDisk) {
         Write-Host "Boot Disk: Disk $($bootDisk.Number) - $($bootDisk.Model)"
 
-        # Check and expand OS partition
+        # Cap OS partition at 127 GB max
         try {
+            $maxOSSize = 127GB
             $currentSize = (Get-Partition -DriveLetter C).Size
-            $maxSize = (Get-PartitionSupportedSize -DriveLetter C).SizeMax
+            $currentSizeGB = [math]::Round($currentSize / 1GB, 2)
 
-            if (($maxSize - $currentSize) -gt 1GB) {
-                Write-Host "Expanding OS partition to maximum size..."
-                Resize-Partition -DriveLetter C -Size $maxSize
-                Write-Host "OS partition expanded successfully" -ForegroundColor Green
+            Write-LogProgress "C: drive current size: $currentSizeGB GB" "Info"
+
+            if ($currentSize -lt $maxOSSize) {
+                # C: is smaller than 127 GB, expand it to 127 GB (or max available if less)
+                $supportedSize = Get-PartitionSupportedSize -DriveLetter C
+                $targetSize = [math]::Min($maxOSSize, $supportedSize.SizeMax)
+                $targetSizeGB = [math]::Round($targetSize / 1GB, 2)
+
+                Write-Host "Expanding C: drive to $targetSizeGB GB..."
+                Resize-Partition -DriveLetter C -Size $targetSize
+                Write-Host "OS partition expanded to $targetSizeGB GB" -ForegroundColor Green
+            } elseif ($currentSize -gt $maxOSSize) {
+                # C: is larger than 127 GB - cannot shrink automatically
+                Write-Host "C: drive is $currentSizeGB GB (larger than 127 GB maximum)" -ForegroundColor Yellow
+                Write-Host "Cannot automatically shrink partition - manual intervention required" -ForegroundColor Yellow
             } else {
-                Write-Host "OS partition already at maximum size" -ForegroundColor Green
+                Write-Host "C: drive is already at target size (127 GB)" -ForegroundColor Green
+            }
+
+            # Check for unallocated space on boot disk and create data volumes
+            $partitions = Get-Partition -DiskNumber $bootDisk.Number | Where-Object { $_.Type -ne 'Reserved' -and $_.Type -ne 'System' }
+            $usedSpace = ($partitions | Measure-Object -Property Size -Sum).Sum
+            $diskSize = $bootDisk.Size
+            $unallocatedSpace = $diskSize - $usedSpace
+
+            if ($unallocatedSpace -gt 10GB) {
+                $unallocatedGB = [math]::Round($unallocatedSpace / 1GB, 2)
+                Write-Host "Found $unallocatedGB GB of unallocated space on boot disk" -ForegroundColor Cyan
+                Write-Host "Creating data volume from unallocated space..." -ForegroundColor Cyan
+
+                try {
+                    # Get next available drive letter (start from D:)
+                    $usedLetters = Get-Partition | Where-Object { $_.DriveLetter } | Select-Object -ExpandProperty DriveLetter
+                    $availableLetters = @('D', 'E', 'F', 'G', 'H') | Where-Object { $_ -notin $usedLetters }
+                    $driveLetter = $availableLetters[0]
+
+                    # Create partition from unallocated space
+                    $mediaType = Get-MediaType -Disk $bootDisk
+                    $volumeLabel = "$StorageRedundancy-$mediaType-01"
+
+                    Write-LogProgress "Creating partition with drive letter $driveLetter..." "Info"
+                    $newPartition = New-Partition -DiskNumber $bootDisk.Number -UseMaximumSize -DriveLetter $driveLetter
+
+                    Write-LogProgress "Formatting volume as NTFS..." "Info"
+                    Format-Volume -DriveLetter $driveLetter `
+                                 -FileSystem NTFS `
+                                 -NewFileSystemLabel $volumeLabel `
+                                 -AllocationUnitSize 65536 `
+                                 -Confirm:$false | Out-Null
+
+                    Write-Host "Created ${driveLetter}: drive ($volumeLabel) from unallocated space" -ForegroundColor Green
+                } catch {
+                    Write-Host "Could not create partition from unallocated space: $_" -ForegroundColor Yellow
+                }
+            } else {
+                Write-LogProgress "No significant unallocated space found on boot disk" "Info"
             }
         } catch {
-            Write-Host "Could not resize OS partition: $_" -ForegroundColor Yellow
+            Write-Host "Could not configure OS partition: $_" -ForegroundColor Yellow
         }
     }
 
-    # Configure data disks
+    # Configure additional data disks (separate physical/virtual disks)
     if ($dataDisks.Count -gt 0) {
         Write-Host "Configuring $($dataDisks.Count) data disk(s)..."
 
