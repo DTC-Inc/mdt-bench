@@ -458,6 +458,18 @@ try {
                     ShowWindow = $false
                 },
                 @{
+                    Name = "iDRAC Service Module (iSM)"
+                    Urls = @(
+                        "https://public-dtc.s3.us-west-002.backblazeb2.com/repo/vendors/dell/OSM-iSM-Dell-Web-X64-5.4.2.0-4048.exe"
+                    )
+                    File = "$env:WINDIR\temp\iSM_Setup.exe"
+                    IsExtractor = $true  # This exe extracts then installs
+                    ExtractPath = "C:\Dell\iSM"  # Typical Dell extraction path
+                    ActualSetup = "C:\Dell\iSM\setup.exe"  # You'll verify this path after first run
+                    Args = "/qn"  # Completely silent installation
+                    ShowWindow = $false
+                },
+                @{
                     Name = "Dell System Update"
                     Urls = @(
                         "https://public-dtc.s3.us-west-002.backblazeb2.com/repo/vendors/dell/Systems-Management_Application_W7K0J_WN64_2.1.2.0_A01.EXE"
