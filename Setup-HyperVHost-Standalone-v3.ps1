@@ -1135,9 +1135,12 @@ try {
                                     -EnableEmbeddedTeaming $true `
                                     -AllowManagementOS $true -ErrorAction Stop
 
+                        # Set load balancing algorithm to Dynamic for best performance
+                        Set-VMSwitchTeam -Name "SET$teamNumber" -LoadBalancingAlgorithm Dynamic
+
                         Rename-VMNetworkAdapter -Name "SET$teamNumber" -NewName "vNIC-Mgmt-SET$teamNumber" -ManagementOS
 
-                        Write-Host "Created SET$teamNumber successfully" -ForegroundColor Green
+                        Write-Host "Created SET$teamNumber successfully with Dynamic load balancing" -ForegroundColor Green
                         $teamNumber++
                         $adapterIndex += $TeamsOf
                     } catch {
@@ -1173,8 +1176,11 @@ try {
                                     -EnableEmbeddedTeaming $true `
                                     -AllowManagementOS $true
 
+                        # Set load balancing algorithm to Dynamic for best performance
+                        Set-VMSwitchTeam -Name "SET1" -LoadBalancingAlgorithm Dynamic
+
                         Rename-VMNetworkAdapter -Name "SET1" -NewName "vNIC-Mgmt-SET1" -ManagementOS
-                        Write-Host "Created SET1 successfully" -ForegroundColor Green
+                        Write-Host "Created SET1 successfully with Dynamic load balancing" -ForegroundColor Green
                     } catch {
                         Write-Host "Failed to create team: $_" -ForegroundColor Yellow
                     }
