@@ -1211,25 +1211,50 @@ try {
     if (!$SkipBitLocker) {
         Start-ProgressStep "BitLocker Configuration"
 
-        # Check if BitLocker feature is actually installed and available
+        # Check if BitLocker features are installed
         Write-LogProgress "Checking BitLocker feature availability..." "Info"
         $bitlockerFeature = Get-WindowsFeature -Name BitLocker -ErrorAction SilentlyContinue
+        $bitlockerAdminTools = Get-WindowsFeature -Name RSAT-Feature-Tools-BitLocker -ErrorAction SilentlyContinue
+
+        Write-LogProgress "  BitLocker Feature: $($bitlockerFeature.InstallState)" "Debug"
+        Write-LogProgress "  BitLocker Admin Tools: $($bitlockerAdminTools.InstallState)" "Debug"
 
         if (!$bitlockerFeature -or $bitlockerFeature.InstallState -ne "Installed") {
-            Write-LogProgress "BitLocker feature not yet installed or not available" "Warning"
+            Write-LogProgress "BitLocker feature not yet installed" "Warning"
             Write-Host "BitLocker configuration skipped - feature not installed" -ForegroundColor Yellow
-            Write-Host "Re-run this script after reboot to configure BitLocker" -ForegroundColor Yellow
+            Write-Host "Install BitLocker feature and reboot before configuring" -ForegroundColor Yellow
+        } elseif (!$bitlockerAdminTools -or $bitlockerAdminTools.InstallState -ne "Installed") {
+            Write-LogProgress "BitLocker Admin Tools (RSAT) not yet installed" "Warning"
+            Write-Host "BitLocker configuration skipped - admin tools not installed" -ForegroundColor Yellow
+            Write-Host "Install RSAT-Feature-Tools-BitLocker and reboot before configuring" -ForegroundColor Yellow
         } else {
-            # Feature is installed, try to import module
-            Write-LogProgress "BitLocker feature is installed, importing PowerShell module..." "Info"
+            # Both features installed, try to import module
+            Write-LogProgress "BitLocker features installed, checking PowerShell module..." "Info"
+
+            # Check if module files exist
+            $modulePath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\Modules\BitLocker"
+            if (Test-Path $modulePath) {
+                Write-LogProgress "  BitLocker module path found: $modulePath" "Debug"
+            } else {
+                Write-LogProgress "  BitLocker module path NOT found: $modulePath" "Warning"
+                Write-Host "BitLocker configuration skipped - module files not available" -ForegroundColor Yellow
+                Write-Host "This usually means a REBOOT IS REQUIRED after BitLocker installation" -ForegroundColor Yellow
+                Write-Host "Reboot the server and re-run this script to enable BitLocker" -ForegroundColor Yellow
+                # Skip to end of BitLocker section
+                continue
+            }
+
             try {
                 Import-Module BitLocker -ErrorAction Stop
                 Write-LogProgress "BitLocker module loaded successfully" "Success"
             } catch {
-                Write-LogProgress "Failed to import BitLocker module: $_" "Error"
-                Write-LogProgress "BitLocker PowerShell module may not be ready yet" "Warning"
-                Write-Host "BitLocker configuration skipped - module not ready" -ForegroundColor Yellow
-                Write-Host "Re-run this script after reboot to configure BitLocker" -ForegroundColor Yellow
+                Write-LogProgress "Failed to import BitLocker module: $($_.Exception.Message)" "Error"
+                Write-LogProgress "Module files may not be available until after reboot" "Warning"
+                Write-Host "BitLocker configuration skipped - module import failed" -ForegroundColor Yellow
+                Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
+                Write-Host ""  -ForegroundColor Yellow
+                Write-Host "SOLUTION: Reboot the server to complete BitLocker installation" -ForegroundColor Cyan
+                Write-Host "Then re-run this script to configure BitLocker encryption" -ForegroundColor Cyan
             }
         }
 
