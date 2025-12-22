@@ -30,6 +30,7 @@
 ## $CompanyName = "DTC"             # Company name for branding
 ## $AcceptRAIDWarning = $false      # Accept single RAID disk warning
 ## $TimeZone = "Eastern Standard Time"  # Time zone to set (e.g., "Pacific Standard Time", "Central Standard Time", "Mountain Standard Time")
+## $iDRACPassword = ""               # iDRAC root password to set (leave blank to skip iDRAC configuration)
 
 #Requires -RunAsAdministrator
 #Requires -Version 5.1
@@ -756,6 +757,63 @@ try {
                     Write-Host "  Failed to run Dell System Update: $_" -ForegroundColor Yellow
                     Write-LogProgress "  DSU execution error: $_" "Warning"
                 }
+            }
+        }
+
+        # Configure iDRAC password if specified
+        if (![string]::IsNullOrEmpty($iDRACPassword)) {
+            Write-Host ""
+            Write-Host "========================================" -ForegroundColor Cyan
+            Write-Host "Configuring iDRAC Password..." -ForegroundColor Cyan
+            Write-Host "========================================" -ForegroundColor Cyan
+
+            $racadmPath = "C:\Program Files\Dell\SysMgt\oma\bin\racadm.exe"
+            if (Test-Path $racadmPath) {
+                Write-LogProgress "RACADM utility found at: $racadmPath" "Info"
+
+                try {
+                    # Set password for iDRAC user 2 (root account)
+                    Write-Host "  Setting iDRAC root password..." -ForegroundColor Gray
+                    $setPasswordProcess = Start-Process -FilePath $racadmPath `
+                                                       -ArgumentList "set iDRAC.Users.2.Password `"$iDRACPassword`"" `
+                                                       -PassThru -NoNewWindow -Wait
+
+                    if ($setPasswordProcess.ExitCode -eq 0) {
+                        Write-Host "  iDRAC root password set successfully" -ForegroundColor Green
+                        Write-LogProgress "  iDRAC root password configured" "Success"
+
+                        # Enable the user account (in case it's disabled)
+                        Write-Host "  Enabling iDRAC root user..." -ForegroundColor Gray
+                        $enableUserProcess = Start-Process -FilePath $racadmPath `
+                                                          -ArgumentList "set iDRAC.Users.2.Enable 1" `
+                                                          -PassThru -NoNewWindow -Wait
+
+                        if ($enableUserProcess.ExitCode -eq 0) {
+                            Write-Host "  iDRAC root user enabled successfully" -ForegroundColor Green
+                            Write-LogProgress "  iDRAC root user enabled" "Success"
+                        } else {
+                            Write-Host "  WARNING: Failed to enable iDRAC root user (exit code: $($enableUserProcess.ExitCode))" -ForegroundColor Yellow
+                            Write-LogProgress "  Failed to enable iDRAC root user: exit code $($enableUserProcess.ExitCode)" "Warning"
+                        }
+
+                        Write-Host ""
+                        Write-Host "  iDRAC Configuration Complete" -ForegroundColor Green
+                        Write-Host "  You can now access iDRAC using:" -ForegroundColor Cyan
+                        Write-Host "    Username: root" -ForegroundColor Gray
+                        Write-Host "    Password: (configured password)" -ForegroundColor Gray
+                        Write-Host ""
+                    } else {
+                        Write-Host "  ERROR: Failed to set iDRAC password (exit code: $($setPasswordProcess.ExitCode))" -ForegroundColor Red
+                        Write-LogProgress "  Failed to set iDRAC password: exit code $($setPasswordProcess.ExitCode)" "Error"
+                    }
+                } catch {
+                    Write-Host "  ERROR: Failed to configure iDRAC: $_" -ForegroundColor Red
+                    Write-LogProgress "  iDRAC configuration error: $_" "Error"
+                }
+            } else {
+                Write-Host "  WARNING: RACADM utility not found - cannot configure iDRAC" -ForegroundColor Yellow
+                Write-Host "  RACADM is typically installed with OpenManage Server Administrator" -ForegroundColor Yellow
+                Write-LogProgress "  RACADM not found at: $racadmPath" "Warning"
             }
         }
     } else {
