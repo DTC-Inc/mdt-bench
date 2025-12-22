@@ -449,6 +449,9 @@ try {
                         "https://public-dtc.s3.us-west-002.backblazeb2.com/repo/vendors/dell/OM-SrvAdmin-Dell-Web-WINX64-11.0.1.0-5494_A00.exe"
                     )
                     File = "$env:WINDIR\temp\OMSA_Setup.exe"
+                    IsExtractor = $true  # This exe extracts to C:\OpenManage
+                    ExtractPath = "C:\OpenManage"
+                    ActualSetup = "C:\OpenManage\windows\setup.exe"
                     Args = "/qb"  # Basic UI with progress bar instead of silent
                     ShowWindow = $true
                 },
@@ -529,14 +532,52 @@ try {
 
                 if ($downloadSuccess) {
                     try {
-                        Write-LogProgress "  Installing $($download.Name)..." "Info"
+                        # Check if this is an extractor (like OpenManage)
+                        if ($download.IsExtractor) {
+                            Write-LogProgress "  Extracting $($download.Name)..." "Info"
+                            Write-LogProgress "    Running extractor to $($download.ExtractPath)..." "Debug"
 
-                        # Start installer - show window if configured
-                        if ($download.ShowWindow) {
-                            Write-LogProgress "    Installation window will show progress - DO NOT CLOSE IT!" "Warning"
-                            $process = Start-Process -FilePath $download.File -ArgumentList $download.Args -PassThru
+                            # Run extractor silently - no window needed for extraction
+                            $extractProcess = Start-Process -FilePath $download.File -ArgumentList "/s" -PassThru -NoNewWindow -ErrorAction Stop
+
+                            # Wait for extraction to complete
+                            $extractStartTime = Get-Date
+                            while (!$extractProcess.HasExited) {
+                                $elapsed = [math]::Round(((Get-Date) - $extractStartTime).TotalMinutes, 1)
+                                if ($elapsed -gt 0 -and ($elapsed % 1) -eq 0) {
+                                    Write-LogProgress "    Still extracting... ($elapsed minutes elapsed)" "Debug"
+                                }
+                                Start-Sleep -Seconds 10
+                            }
+
+                            $extractTime = [math]::Round(((Get-Date) - $extractStartTime).TotalMinutes, 1)
+                            Write-LogProgress "    Extraction completed (took $extractTime minutes)" "Success"
+
+                            # Verify extracted setup exists
+                            if (!(Test-Path $download.ActualSetup)) {
+                                throw "Extracted setup not found at: $($download.ActualSetup)"
+                            }
+
+                            Write-LogProgress "  Installing $($download.Name) from extracted files..." "Info"
+
+                            # Now run the actual setup from extracted location
+                            if ($download.ShowWindow) {
+                                Write-LogProgress "    Installation window will show progress - DO NOT CLOSE IT!" "Warning"
+                                $process = Start-Process -FilePath $download.ActualSetup -ArgumentList $download.Args -PassThru
+                            } else {
+                                $process = Start-Process -FilePath $download.ActualSetup -ArgumentList $download.Args -PassThru -NoNewWindow
+                            }
                         } else {
-                            $process = Start-Process -FilePath $download.File -ArgumentList $download.Args -PassThru -NoNewWindow
+                            # Normal installer - not an extractor
+                            Write-LogProgress "  Installing $($download.Name)..." "Info"
+
+                            # Start installer - show window if configured
+                            if ($download.ShowWindow) {
+                                Write-LogProgress "    Installation window will show progress - DO NOT CLOSE IT!" "Warning"
+                                $process = Start-Process -FilePath $download.File -ArgumentList $download.Args -PassThru
+                            } else {
+                                $process = Start-Process -FilePath $download.File -ArgumentList $download.Args -PassThru -NoNewWindow
+                            }
                         }
 
                         # Wait for installation to complete - no arbitrary timeout
