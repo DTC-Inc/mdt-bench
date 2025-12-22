@@ -1147,7 +1147,6 @@ try {
             @{id = "Mozilla.Firefox"; name = "Firefox"},
             @{id = "7zip.7zip"; name = "7-Zip"},
             @{id = "Notepad++.Notepad++"; name = "Notepad++"},
-            @{id = "Microsoft.VisualStudioCode"; name = "Visual Studio Code"},
             @{id = "Microsoft.WindowsTerminal"; name = "Windows Terminal"}
         )
 
