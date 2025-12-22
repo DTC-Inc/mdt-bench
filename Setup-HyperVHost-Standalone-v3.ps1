@@ -906,43 +906,60 @@ try {
                 Write-Host "C: drive is already at target size (127 GB)" -ForegroundColor Green
             }
 
-            # Check for unallocated space on boot disk and create data volumes
-            $partitions = Get-Partition -DiskNumber $bootDisk.Number | Where-Object { $_.Type -ne 'Reserved' -and $_.Type -ne 'System' }
-            $usedSpace = ($partitions | Measure-Object -Property Size -Sum).Sum
-            $diskSize = $bootDisk.Size
-            $unallocatedSpace = $diskSize - $usedSpace
+            # Check if data volumes already exist on boot disk
+            $bootDiskPartitions = Get-Partition -DiskNumber $bootDisk.Number -ErrorAction SilentlyContinue
+            $existingDataVolumesOnBootDisk = $bootDiskPartitions | Where-Object {
+                $_.DriveLetter -and $_.DriveLetter -ne 'C' -and $_.Type -eq 'Basic'
+            }
 
-            if ($unallocatedSpace -gt 10GB) {
-                $unallocatedGB = [math]::Round($unallocatedSpace / 1GB, 2)
-                Write-Host "Found $unallocatedGB GB of unallocated space on boot disk" -ForegroundColor Cyan
-                Write-Host "Creating data volume from unallocated space..." -ForegroundColor Cyan
-
-                try {
-                    # Get next available drive letter (start from D:)
-                    $usedLetters = Get-Partition | Where-Object { $_.DriveLetter } | Select-Object -ExpandProperty DriveLetter
-                    $availableLetters = @('D', 'E', 'F', 'G', 'H') | Where-Object { $_ -notin $usedLetters }
-                    $driveLetter = $availableLetters[0]
-
-                    # Create partition from unallocated space
-                    $mediaType = Get-MediaType -Disk $bootDisk
-                    $volumeLabel = "$StorageRedundancy-$mediaType-01"
-
-                    Write-LogProgress "Creating partition with drive letter $driveLetter..." "Info"
-                    $newPartition = New-Partition -DiskNumber $bootDisk.Number -UseMaximumSize -DriveLetter $driveLetter
-
-                    Write-LogProgress "Formatting volume as NTFS..." "Info"
-                    Format-Volume -DriveLetter $driveLetter `
-                                 -FileSystem NTFS `
-                                 -NewFileSystemLabel $volumeLabel `
-                                 -AllocationUnitSize 65536 `
-                                 -Confirm:$false | Out-Null
-
-                    Write-Host "Created ${driveLetter}: drive ($volumeLabel) from unallocated space" -ForegroundColor Green
-                } catch {
-                    Write-Host "Could not create partition from unallocated space: $_" -ForegroundColor Yellow
+            if ($existingDataVolumesOnBootDisk) {
+                # Data volumes already exist on boot disk - don't recreate
+                foreach ($partition in $existingDataVolumesOnBootDisk) {
+                    $volume = Get-Volume -DriveLetter $partition.DriveLetter -ErrorAction SilentlyContinue
+                    if ($volume) {
+                        Write-Host "Data volume already exists: $($partition.DriveLetter): - $($volume.FileSystemLabel) ($([math]::Round($volume.Size/1GB,2)) GB)" -ForegroundColor Green
+                    }
                 }
+                Write-LogProgress "Skipping data volume creation - volumes already exist on boot disk" "Info"
             } else {
-                Write-LogProgress "No significant unallocated space found on boot disk" "Info"
+                # No existing data volumes - check for unallocated space
+                $partitions = Get-Partition -DiskNumber $bootDisk.Number | Where-Object { $_.Type -ne 'Reserved' -and $_.Type -ne 'System' }
+                $usedSpace = ($partitions | Measure-Object -Property Size -Sum).Sum
+                $diskSize = $bootDisk.Size
+                $unallocatedSpace = $diskSize - $usedSpace
+
+                if ($unallocatedSpace -gt 10GB) {
+                    $unallocatedGB = [math]::Round($unallocatedSpace / 1GB, 2)
+                    Write-Host "Found $unallocatedGB GB of unallocated space on boot disk" -ForegroundColor Cyan
+                    Write-Host "Creating data volume from unallocated space..." -ForegroundColor Cyan
+
+                    try {
+                        # Get next available drive letter (start from D:)
+                        $usedLetters = Get-Partition | Where-Object { $_.DriveLetter } | Select-Object -ExpandProperty DriveLetter
+                        $availableLetters = @('D', 'E', 'F', 'G', 'H') | Where-Object { $_ -notin $usedLetters }
+                        $driveLetter = $availableLetters[0]
+
+                        # Create partition from unallocated space
+                        $mediaType = Get-MediaType -Disk $bootDisk
+                        $volumeLabel = "$StorageRedundancy-$mediaType-01"
+
+                        Write-LogProgress "Creating partition with drive letter $driveLetter..." "Info"
+                        $newPartition = New-Partition -DiskNumber $bootDisk.Number -UseMaximumSize -DriveLetter $driveLetter
+
+                        Write-LogProgress "Formatting volume as NTFS..." "Info"
+                        Format-Volume -DriveLetter $driveLetter `
+                                     -FileSystem NTFS `
+                                     -NewFileSystemLabel $volumeLabel `
+                                     -AllocationUnitSize 65536 `
+                                     -Confirm:$false | Out-Null
+
+                        Write-Host "Created ${driveLetter}: drive ($volumeLabel) from unallocated space" -ForegroundColor Green
+                    } catch {
+                        Write-Host "Could not create partition from unallocated space: $_" -ForegroundColor Yellow
+                    }
+                } else {
+                    Write-LogProgress "No significant unallocated space found on boot disk" "Info"
+                }
             }
         } catch {
             Write-Host "Could not configure OS partition: $_" -ForegroundColor Yellow
@@ -1178,16 +1195,26 @@ try {
     if (!$SkipBitLocker) {
         Start-ProgressStep "BitLocker Configuration"
 
-        # Import BitLocker module
-        Write-LogProgress "Importing BitLocker PowerShell module..." "Info"
-        try {
-            Import-Module BitLocker -ErrorAction Stop
-            Write-LogProgress "BitLocker module loaded successfully" "Success"
-        } catch {
-            Write-LogProgress "Failed to import BitLocker module: $_" "Error"
-            Write-LogProgress "BitLocker features may not be installed yet - skipping BitLocker configuration" "Warning"
-            Write-Host "BitLocker configuration skipped - module not available" -ForegroundColor Yellow
-            Write-Host "This may require a reboot for BitLocker features to become available" -ForegroundColor Yellow
+        # Check if BitLocker feature is actually installed and available
+        Write-LogProgress "Checking BitLocker feature availability..." "Info"
+        $bitlockerFeature = Get-WindowsFeature -Name BitLocker -ErrorAction SilentlyContinue
+
+        if (!$bitlockerFeature -or $bitlockerFeature.InstallState -ne "Installed") {
+            Write-LogProgress "BitLocker feature not yet installed or not available" "Warning"
+            Write-Host "BitLocker configuration skipped - feature not installed" -ForegroundColor Yellow
+            Write-Host "Re-run this script after reboot to configure BitLocker" -ForegroundColor Yellow
+        } else {
+            # Feature is installed, try to import module
+            Write-LogProgress "BitLocker feature is installed, importing PowerShell module..." "Info"
+            try {
+                Import-Module BitLocker -ErrorAction Stop
+                Write-LogProgress "BitLocker module loaded successfully" "Success"
+            } catch {
+                Write-LogProgress "Failed to import BitLocker module: $_" "Error"
+                Write-LogProgress "BitLocker PowerShell module may not be ready yet" "Warning"
+                Write-Host "BitLocker configuration skipped - module not ready" -ForegroundColor Yellow
+                Write-Host "Re-run this script after reboot to configure BitLocker" -ForegroundColor Yellow
+            }
         }
 
         # Check if module was imported successfully
