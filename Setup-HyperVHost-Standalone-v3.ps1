@@ -29,6 +29,7 @@
 ## $StorageRedundancy = "ers"       # Storage naming (ers/rrs/zrs/grs)
 ## $CompanyName = "DTC"             # Company name for branding
 ## $AcceptRAIDWarning = $false      # Accept single RAID disk warning
+## $TimeZone = "Eastern Standard Time"  # Time zone to set (e.g., "Pacific Standard Time", "Central Standard Time", "Mountain Standard Time")
 
 #Requires -RunAsAdministrator
 #Requires -Version 5.1
@@ -50,6 +51,7 @@ if ($null -eq $TeamsOf) { $TeamsOf = 2 }
 if ($null -eq $AutoNICTeaming) { $AutoNICTeaming = $false }
 if ($null -eq $StorageRedundancy) { $StorageRedundancy = "ers" }
 if ($null -eq $AcceptRAIDWarning) { $AcceptRAIDWarning = $false }
+if ($null -eq $TimeZone) { $TimeZone = "Eastern Standard Time" }
 
 # Detect RMM mode
 if ($RMM -ne 1) {
@@ -102,6 +104,23 @@ if ($RMM -ne 1) {
     $input = Read-Host "Storage redundancy type (ers/rrs/zrs/grs, default: ers)"
     if ($input -in @("ers", "rrs", "zrs", "grs")) {
         $StorageRedundancy = $input
+    }
+
+    $input = Read-Host "Enter time zone (default: Eastern Standard Time, type 'list' to see all)"
+    if ($input -eq 'list') {
+        Write-Host "Common US Time Zones:" -ForegroundColor Yellow
+        Write-Host "  Eastern Standard Time" -ForegroundColor Gray
+        Write-Host "  Central Standard Time" -ForegroundColor Gray
+        Write-Host "  Mountain Standard Time" -ForegroundColor Gray
+        Write-Host "  Pacific Standard Time" -ForegroundColor Gray
+        Write-Host "  Alaskan Standard Time" -ForegroundColor Gray
+        Write-Host "  Hawaiian Standard Time" -ForegroundColor Gray
+        Write-Host ""
+        Write-Host "Use 'Get-TimeZone -ListAvailable' in PowerShell to see all available time zones" -ForegroundColor Gray
+        $input = Read-Host "Enter time zone"
+    }
+    if (![string]::IsNullOrEmpty($input)) {
+        $TimeZone = $input
     }
 
     $Description = Read-Host "Enter a description for this setup (optional)"
@@ -299,6 +318,7 @@ try {
     Write-LogProgress "  NICs per Team: $TeamsOf" "Info"
     Write-LogProgress "  Auto NIC Teaming: $AutoNICTeaming" "Info"
     Write-LogProgress "  Storage Redundancy: $StorageRedundancy" "Info"
+    Write-LogProgress "  Time Zone: $TimeZone" "Info"
     Write-LogProgress "" "Info"
 
     # ============================================================================
@@ -363,14 +383,10 @@ try {
     Write-Host "Installing additional Windows features..."
 
     $featuresToInstall = @(
-        @{Name = "SNMP-Service"; Description = "SNMP Service"},
         @{Name = "RSAT-Hyper-V-Tools"; Description = "Hyper-V Management Tools"},
         @{Name = "Hyper-V-PowerShell"; Description = "Hyper-V PowerShell Module"},
         @{Name = "Windows-Defender"; Description = "Windows Defender"},
-        @{Name = "FS-Data-Deduplication"; Description = "Data Deduplication"},
-        @{Name = "Multipath-IO"; Description = "MPIO for Storage"},
-        @{Name = "Failover-Clustering"; Description = "Failover Clustering (for future use)"},
-        @{Name = "RSAT-Clustering-PowerShell"; Description = "Clustering PowerShell"}
+        @{Name = "Multipath-IO"; Description = "MPIO for Storage"}
     )
 
     $featuresNeedingReboot = @()
@@ -421,43 +437,38 @@ try {
         if (!$omsaInstalled) {
             Write-Host "Dell OpenManage not found, installing..."
 
+            # Ensure BITS service is running for reliable downloads
+            Write-LogProgress "Ensuring BITS service is running..." "Debug"
+            Start-Service -Name BITS -ErrorAction SilentlyContinue
+
             # Download URLs for Dell tools - Using Backblaze B2 public bucket
-            # Primary URLs from B2 S3-compatible endpoint, with Dell direct links as fallback
             $downloads = @(
                 @{
                     Name = "OpenManage Server Administrator"
                     Urls = @(
-                        "https://public-dtc.s3.us-west-002.backblazeb2.com/repo/vendors/dell/OM-SrvAdmin-Dell-Web-WINX64-11.0.1.0-5494_A00.exe",
-                        "https://dl.dell.com/FOLDER11337880M/1/Windows_OMSA_11.0.1.0_A00.exe"
+                        "https://public-dtc.s3.us-west-002.backblazeb2.com/repo/vendors/dell/OM-SrvAdmin-Dell-Web-WINX64-11.0.1.0-5494_A00.exe"
                     )
                     File = "$env:WINDIR\temp\OMSA_Setup.exe"
-                    Args = "/s"
+                    Args = "/qb"  # Basic UI with progress bar instead of silent
+                    ShowWindow = $true
                 },
                 @{
                     Name = "iDRAC Tools"
                     Urls = @(
-                        "https://public-dtc.s3.us-west-002.backblazeb2.com/repo/vendors/dell/Dell-iDRACTools-Web-WINX64-11.4.0.0-1435_A00.exe",
-                        "https://dl.dell.com/FOLDER11034445M/1/iDRAC-Service-Module-5.3.0.0_Windows_x64.exe"
+                        "https://public-dtc.s3.us-west-002.backblazeb2.com/repo/vendors/dell/Dell-iDRACTools-Web-WINX64-11.4.0.0-1435_A00.exe"
                     )
                     File = "$env:WINDIR\temp\ISM_Setup.exe"
-                    Args = "/s"
+                    Args = "/qb"  # Basic UI with progress bar instead of silent
+                    ShowWindow = $true
                 },
                 @{
                     Name = "Dell System Update"
                     Urls = @(
-                        "https://public-dtc.s3.us-west-002.backblazeb2.com/repo/vendors/dell/Systems-Management_Application_W7K0J_WN64_2.1.2.0_A01.EXE",
-                        "https://dl.dell.com/FOLDER11689994M/1/Systems-Management_Application_NVD8W_WN64_2.0.2.3_A00.EXE"
+                        "https://public-dtc.s3.us-west-002.backblazeb2.com/repo/vendors/dell/Systems-Management_Application_W7K0J_WN64_2.1.2.0_A01.EXE"
                     )
                     File = "$env:WINDIR\temp\DSU_Setup.exe"
-                    Args = "/s"
-                },
-                @{
-                    Name = "Dell PERCCLI"
-                    Urls = @(
-                        "https://dl.dell.com/FOLDER09766599M/1/PERCCLI_7.2313.0_A16_Windows.zip"
-                    )
-                    File = "$env:WINDIR\temp\perccli.zip"
-                    Args = $null
+                    Args = "/passive"  # Passive mode shows progress
+                    ShowWindow = $true
                 }
             )
 
@@ -467,56 +478,92 @@ try {
                 # Try each URL in order until one succeeds
                 foreach ($url in $download.Urls) {
                     try {
-                        Write-Host "  Downloading $($download.Name)..."
-                        Write-Host "    Trying: $url" -ForegroundColor Gray
-                        Invoke-WebRequest -Uri $url -OutFile $download.File -UseBasicParsing -ErrorAction Stop
-                        $downloadSuccess = $true
-                        Write-Host "    Download successful" -ForegroundColor Green
-                        break
+                        Write-LogProgress "  Downloading $($download.Name)..." "Info"
+                        Write-LogProgress "    Trying: $url" "Debug"
+
+                        # Try BITS transfer first for better reliability
+                        try {
+                            $bitsJob = Start-BitsTransfer -Source $url -Destination $download.File `
+                                -DisplayName $download.Name -Priority Normal -AsJob -ErrorAction Stop
+
+                            Write-LogProgress "    BITS transfer started (Job ID: $($bitsJob.JobId))" "Debug"
+
+                            # Monitor BITS job progress
+                            while (($bitsJob.JobState -eq "Transferring") -or ($bitsJob.JobState -eq "Connecting")) {
+                                $percentComplete = if ($bitsJob.BytesTotal -gt 0) {
+                                    [math]::Round(($bitsJob.BytesTransferred / $bitsJob.BytesTotal) * 100, 2)
+                                } else { 0 }
+                                Write-LogProgress "    Progress: $percentComplete% - $($bitsJob.JobState)" "Debug"
+                                Start-Sleep -Seconds 5
+                                $bitsJob = Get-BitsTransfer -JobId $bitsJob.JobId
+                            }
+
+                            if ($bitsJob.JobState -eq "Transferred") {
+                                Complete-BitsTransfer -BitsJob $bitsJob
+                                Write-LogProgress "    BITS download successful" "Success"
+                                $downloadSuccess = $true
+                                break
+                            } else {
+                                Write-LogProgress "    BITS transfer failed: $($bitsJob.JobState)" "Warning"
+                                Remove-BitsTransfer -BitsJob $bitsJob -ErrorAction SilentlyContinue
+                                throw "BITS transfer failed"
+                            }
+                        } catch {
+                            Write-LogProgress "    BITS failed: $_" "Warning"
+                            Write-LogProgress "    Falling back to direct download..." "Info"
+
+                            # Fallback to Invoke-WebRequest
+                            $progressPreference = 'SilentlyContinue'  # Speed up download
+                            Invoke-WebRequest -Uri $url -OutFile $download.File -UseBasicParsing -ErrorAction Stop
+                            $progressPreference = 'Continue'
+
+                            Write-LogProgress "    Direct download successful" "Success"
+                            $downloadSuccess = $true
+                            break
+                        }
                     } catch {
-                        Write-Host "    Failed: $_" -ForegroundColor Yellow
+                        Write-LogProgress "    Failed: $_" "Warning"
                         continue
                     }
                 }
 
                 if ($downloadSuccess) {
                     try {
-                        if ($download.File -like "*.zip") {
-                            # Extract PERCCLI
-                            Expand-Archive -Path $download.File -DestinationPath "$env:WINDIR\temp\perccli" -Force
-                            $perccliExe = Get-ChildItem -Path "$env:WINDIR\temp\perccli" -Filter "perccli64.exe" -Recurse | Select-Object -First 1
-                            if ($perccliExe) {
-                                # Create Dell directory if it doesn't exist
-                                if (!(Test-Path "C:\Program Files\Dell")) {
-                                    New-Item -Path "C:\Program Files\Dell" -ItemType Directory -Force | Out-Null
-                                }
-                                Copy-Item $perccliExe.FullName -Destination "C:\Program Files\Dell\perccli64.exe" -Force
-                                Write-Host "  PERCCLI installed" -ForegroundColor Green
-                            }
+                        Write-LogProgress "  Installing $($download.Name)..." "Info"
+
+                        # Start installer - show window if configured
+                        if ($download.ShowWindow) {
+                            Write-LogProgress "    Installation window will show progress - DO NOT CLOSE IT!" "Warning"
+                            $process = Start-Process -FilePath $download.File -ArgumentList $download.Args -PassThru
                         } else {
-                            Write-LogProgress "  Installing $($download.Name) (may take 2-5 minutes)..." "Info"
-
-                            # Start installer with timeout
                             $process = Start-Process -FilePath $download.File -ArgumentList $download.Args -PassThru -NoNewWindow
-                            $timeoutSeconds = 300  # 5 minute timeout
-                            $waited = 0
+                        }
 
-                            while (!$process.HasExited -and $waited -lt $timeoutSeconds) {
-                                Start-Sleep -Seconds 5
-                                $waited += 5
-                                if ($waited % 30 -eq 0) {
-                                    Write-LogProgress "    Still installing... ($waited seconds elapsed)" "Debug"
-                                }
+                        # Wait for installation to complete - no arbitrary timeout
+                        Write-LogProgress "    Waiting for installation to complete..." "Info"
+                        $startTime = Get-Date
+
+                        while (!$process.HasExited) {
+                            $elapsed = [math]::Round(((Get-Date) - $startTime).TotalMinutes, 1)
+
+                            # Report progress every minute
+                            if ($elapsed -gt 0 -and ($elapsed % 1) -eq 0) {
+                                Write-LogProgress "    Still installing... ($elapsed minutes elapsed)" "Debug"
                             }
 
-                            if (!$process.HasExited) {
-                                Write-LogProgress "    Installation timeout after $timeoutSeconds seconds" "Warning"
-                                $process | Stop-Process -Force -ErrorAction SilentlyContinue
-                            } elseif ($process.ExitCode -eq 0) {
-                                Write-LogProgress "  $($download.Name) installed successfully" "Success"
-                            } else {
-                                Write-LogProgress "  $($download.Name) installer returned exit code: $($process.ExitCode)" "Warning"
-                            }
+                            Start-Sleep -Seconds 10
+                        }
+
+                        # Check exit code
+                        $totalTime = [math]::Round(((Get-Date) - $startTime).TotalMinutes, 1)
+
+                        if ($process.ExitCode -eq 0) {
+                            Write-LogProgress "  $($download.Name) installed successfully (took $totalTime minutes)" "Success"
+                        } elseif ($process.ExitCode -eq 3010 -or $process.ExitCode -eq 3011) {
+                            Write-LogProgress "  $($download.Name) installed but requires reboot (exit code: $($process.ExitCode))" "Warning"
+                            Add-RebootReason "$($download.Name) installation"
+                        } else {
+                            Write-LogProgress "  $($download.Name) installer returned exit code: $($process.ExitCode)" "Warning"
                         }
                     } catch {
                         Write-Host "  Failed to install $($download.Name): $_" -ForegroundColor Yellow
@@ -531,21 +578,6 @@ try {
             Write-Host "Dell tools installed (MAY REQUIRE REBOOT)" -ForegroundColor Yellow
         } else {
             Write-Host "Dell OpenManage already installed" -ForegroundColor Green
-        }
-
-        # Try to find PERCCLI for RAID checking
-        $perccliPaths = @(
-            "C:\Program Files\Dell\perccli64.exe",
-            "C:\Program Files\Dell\SysMgt\oma\bin\perccli64.exe",
-            "$env:WINDIR\temp\perccli\perccli64.exe"
-        )
-
-        $perccliPath = $null
-        foreach ($path in $perccliPaths) {
-            if (Test-Path $path) {
-                $perccliPath = $path
-                break
-            }
         }
     } else {
         Write-Host "Non-Dell hardware - skipping OEM tools"
@@ -652,18 +684,6 @@ try {
 
     #region Step 5: Storage Configuration
     Start-ProgressStep "Storage Configuration"
-
-    # Check RAID configuration if Dell with PERCCLI
-    if ($perccliPath) {
-        Write-LogProgress "Checking RAID configuration with PERCCLI..." "Info"
-        try {
-            $raidInfo = & $perccliPath /c0 show
-            # Log RAID info but don't block on it
-            Write-LogProgress "RAID configuration detected" "Success"
-        } catch {
-            Write-LogProgress "Could not query RAID configuration: $_" "Warning"
-        }
-    }
 
     # Get all disks and analyze
     Write-LogProgress "Enumerating storage disks..." "Info"
@@ -1015,8 +1035,15 @@ try {
     # Disable Windows Firewall (temporarily for setup)
     Set-NetFirewallProfile -Profile Domain, Public, Private -Enabled False
 
-    # Set time zone (adjust as needed)
-    # Set-TimeZone -Name "Eastern Standard Time"
+    # Set time zone
+    Write-LogProgress "Setting time zone to: $TimeZone" "Info"
+    try {
+        Set-TimeZone -Name $TimeZone
+        Write-LogProgress "Time zone set successfully" "Success"
+    } catch {
+        Write-LogProgress "Failed to set time zone: $_" "Warning"
+        Write-LogProgress "Verify time zone name with 'Get-TimeZone -ListAvailable'" "Info"
+    }
 
     # Enable registry backup
     New-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Session Manager\Configuration Manager\' `
