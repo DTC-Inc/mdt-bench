@@ -42,6 +42,35 @@ $ScriptVersion = "3.2"
 $ScriptLogName = "HyperVHost-Setup-v3"
 $ServerRole = "HV"  # Hyper-V Host role code
 
+# Helper function to convert strings to booleans
+function ConvertTo-Boolean {
+    param([object]$Value)
+
+    # Already a boolean - return as-is
+    if ($Value -is [bool]) { return $Value }
+
+    # Convert string to boolean
+    if ($Value -is [string]) {
+        switch ($Value.ToLower().Trim()) {
+            "true"  { return $true }
+            "1"     { return $true }
+            "yes"   { return $true }
+            "false" { return $false }
+            "0"     { return $false }
+            "no"    { return $false }
+            default { return $false }  # Default to false for safety
+        }
+    }
+
+    # Numeric conversion
+    if ($Value -is [int] -or $Value -is [long]) {
+        return [bool]$Value
+    }
+
+    # Default to false
+    return $false
+}
+
 # Default configuration values
 if ($null -eq $CompanyName) { $CompanyName = "DTC" }
 if ($null -eq $SkipWindowsUpdate) { $SkipWindowsUpdate = $false }
@@ -52,6 +81,13 @@ if ($null -eq $AutoNICTeaming) { $AutoNICTeaming = $false }
 if ($null -eq $StorageRedundancy) { $StorageRedundancy = "ers" }
 if ($null -eq $AcceptRAIDWarning) { $AcceptRAIDWarning = $false }
 if ($null -eq $TimeZone) { $TimeZone = "Eastern Standard Time" }
+
+# Convert string values to proper booleans (in case RMM passes strings)
+$SkipWindowsUpdate = ConvertTo-Boolean $SkipWindowsUpdate
+$SkipBitLocker = ConvertTo-Boolean $SkipBitLocker
+$SkipNetworkTeaming = ConvertTo-Boolean $SkipNetworkTeaming
+$AutoNICTeaming = ConvertTo-Boolean $AutoNICTeaming
+$AcceptRAIDWarning = ConvertTo-Boolean $AcceptRAIDWarning
 
 # Detect RMM mode
 if ($RMM -ne 1) {
