@@ -658,8 +658,105 @@ try {
             # Dell tools may require reboot
             Add-RebootReason "Dell OpenManage and Tools Installation"
             Write-Host "Dell tools installed (MAY REQUIRE REBOOT)" -ForegroundColor Yellow
+
+            # Run Dell System Update to apply firmware/driver updates
+            $dsuPath = "C:\Program Files\Dell\SysMgt\DSU\dsu.exe"
+            if (Test-Path $dsuPath) {
+                Write-Host ""
+                Write-Host "========================================" -ForegroundColor Cyan
+                Write-Host "Running Dell System Update..." -ForegroundColor Cyan
+                Write-Host "========================================" -ForegroundColor Cyan
+                Write-LogProgress "Dell System Update found at: $dsuPath" "Info"
+                Write-LogProgress "Scanning for firmware and driver updates..." "Info"
+
+                try {
+                    # Run DSU to apply all available updates
+                    # --apply-upgrades: Apply all available updates
+                    # --non-interactive: Run without user prompts
+                    Write-Host "  This may take 10-30 minutes depending on available updates..." -ForegroundColor Yellow
+
+                    $dsuStartTime = Get-Date
+                    $dsuProcess = Start-Process -FilePath $dsuPath `
+                                                -ArgumentList "--apply-upgrades --non-interactive" `
+                                                -PassThru -NoNewWindow -Wait
+
+                    $dsuTotalTime = [math]::Round(((Get-Date) - $dsuStartTime).TotalMinutes, 1)
+
+                    # DSU exit codes:
+                    # 0 = Success, no updates needed or all updates applied successfully
+                    # 1 = Updates applied successfully, but reboot required
+                    # 2 = Updates available but not applied (errors occurred)
+                    # 3 = No updates available
+
+                    switch ($dsuProcess.ExitCode) {
+                        0 {
+                            Write-Host "  Dell System Update completed successfully (took $dsuTotalTime minutes)" -ForegroundColor Green
+                            Write-LogProgress "  DSU: No updates needed or all updates applied" "Success"
+                        }
+                        1 {
+                            Write-Host "  Dell System Update completed - REBOOT REQUIRED (took $dsuTotalTime minutes)" -ForegroundColor Yellow
+                            Write-LogProgress "  DSU: Updates applied, reboot required" "Warning"
+                            Add-RebootReason "Dell System Update firmware/driver updates"
+                        }
+                        3 {
+                            Write-Host "  Dell System Update: No updates available (took $dsuTotalTime minutes)" -ForegroundColor Green
+                            Write-LogProgress "  DSU: System is up to date" "Success"
+                        }
+                        default {
+                            Write-Host "  Dell System Update completed with exit code: $($dsuProcess.ExitCode)" -ForegroundColor Yellow
+                            Write-LogProgress "  DSU: Exit code $($dsuProcess.ExitCode) - check logs for details" "Warning"
+                        }
+                    }
+                } catch {
+                    Write-Host "  Failed to run Dell System Update: $_" -ForegroundColor Yellow
+                    Write-LogProgress "  DSU execution error: $_" "Warning"
+                }
+                Write-Host ""
+            } else {
+                Write-LogProgress "Dell System Update not found - skipping firmware updates" "Warning"
+            }
         } else {
             Write-Host "Dell OpenManage already installed" -ForegroundColor Green
+
+            # If OpenManage is already installed, still offer to run DSU
+            $dsuPath = "C:\Program Files\Dell\SysMgt\DSU\dsu.exe"
+            if (Test-Path $dsuPath) {
+                Write-Host ""
+                Write-Host "Running Dell System Update to check for firmware/driver updates..." -ForegroundColor Cyan
+                Write-LogProgress "Dell System Update found at: $dsuPath" "Info"
+
+                try {
+                    $dsuStartTime = Get-Date
+                    $dsuProcess = Start-Process -FilePath $dsuPath `
+                                                -ArgumentList "--apply-upgrades --non-interactive" `
+                                                -PassThru -NoNewWindow -Wait
+
+                    $dsuTotalTime = [math]::Round(((Get-Date) - $dsuStartTime).TotalMinutes, 1)
+
+                    switch ($dsuProcess.ExitCode) {
+                        0 {
+                            Write-Host "  Dell System Update completed successfully (took $dsuTotalTime minutes)" -ForegroundColor Green
+                            Write-LogProgress "  DSU: No updates needed or all updates applied" "Success"
+                        }
+                        1 {
+                            Write-Host "  Dell System Update completed - REBOOT REQUIRED (took $dsuTotalTime minutes)" -ForegroundColor Yellow
+                            Write-LogProgress "  DSU: Updates applied, reboot required" "Warning"
+                            Add-RebootReason "Dell System Update firmware/driver updates"
+                        }
+                        3 {
+                            Write-Host "  Dell System Update: No updates available (took $dsuTotalTime minutes)" -ForegroundColor Green
+                            Write-LogProgress "  DSU: System is up to date" "Success"
+                        }
+                        default {
+                            Write-Host "  Dell System Update completed with exit code: $($dsuProcess.ExitCode)" -ForegroundColor Yellow
+                            Write-LogProgress "  DSU: Exit code $($dsuProcess.ExitCode) - check logs for details" "Warning"
+                        }
+                    }
+                } catch {
+                    Write-Host "  Failed to run Dell System Update: $_" -ForegroundColor Yellow
+                    Write-LogProgress "  DSU execution error: $_" "Warning"
+                }
+            }
         }
     } else {
         Write-Host "Non-Dell hardware - skipping OEM tools"
