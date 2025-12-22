@@ -1262,28 +1262,100 @@ try {
         if (Get-Module -Name BitLocker) {
             $tpm = Get-WmiObject -Namespace "Root\CIMv2\Security\MicrosoftTpm" -Class Win32_Tpm -ErrorAction SilentlyContinue
             if ($tpm) {
+                # Create directory for recovery keys
+                $recoveryKeyPath = "$env:SystemDrive\BitLocker-Recovery-Keys"
+                if (!(Test-Path $recoveryKeyPath)) {
+                    New-Item -Path $recoveryKeyPath -ItemType Directory -Force | Out-Null
+                }
+                $recoveryFile = Join-Path $recoveryKeyPath "BitLocker-Recovery-Passwords-$(Get-Date -Format 'yyyy-MM-dd-HHmmss').txt"
+
                 # Enable BitLocker on OS drive
                 $osDrive = Get-BitLockerVolume | Where-Object { $_.VolumeType -eq "OperatingSystem" }
                 if ($osDrive.ProtectionStatus -eq "Off") {
-                Write-Host "Enabling BitLocker on OS drive..."
-                Enable-BitLocker -MountPoint $osDrive.MountPoint -TpmProtector -EncryptionMethod AES256
-                Add-BitLockerKeyProtector -MountPoint $osDrive.MountPoint -RecoveryPasswordProtector
-                Write-Host "BitLocker enabled on OS drive" -ForegroundColor Green
-            } else {
-                Write-Host "BitLocker already enabled on OS drive" -ForegroundColor Green
-            }
+                    Write-Host "Enabling BitLocker on OS drive ($($osDrive.MountPoint))..."
+                    Write-LogProgress "  Using TPM protector with auto-generated recovery password" "Info"
 
-            # Enable on data drives
-            $dataVolumes = Get-BitLockerVolume | Where-Object { $_.VolumeType -eq "Data" }
-            foreach ($volume in $dataVolumes) {
-                if ($volume.ProtectionStatus -eq "Off") {
-                    Write-Host "Enabling BitLocker on $($volume.MountPoint) drive..."
-                    Enable-BitLocker -MountPoint $volume.MountPoint -PasswordProtector
-                    Add-BitLockerKeyProtector -MountPoint $volume.MountPoint -RecoveryPasswordProtector
-                    Enable-BitLockerAutoUnlock -MountPoint $volume.MountPoint
-                    Write-Host "BitLocker enabled on $($volume.MountPoint)" -ForegroundColor Green
+                    # Enable with TPM and skip hardware test to avoid reboot
+                    Enable-BitLocker -MountPoint $osDrive.MountPoint `
+                                    -TpmProtector `
+                                    -EncryptionMethod XtsAes256 `
+                                    -SkipHardwareTest `
+                                    -UsedSpaceOnly
+
+                    # Add auto-generated recovery password protector
+                    $recoveryProtector = Add-BitLockerKeyProtector -MountPoint $osDrive.MountPoint `
+                                                                   -RecoveryPasswordProtector
+
+                    # Get the recovery password
+                    $recoveryPassword = (Get-BitLockerVolume -MountPoint $osDrive.MountPoint).KeyProtector |
+                                       Where-Object { $_.KeyProtectorType -eq 'RecoveryPassword' } |
+                                       Select-Object -First 1 -ExpandProperty RecoveryPassword
+
+                    # Save recovery password to file
+                    $outputText = @"
+========================================
+BitLocker Recovery Information
+========================================
+Computer: $env:COMPUTERNAME
+Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+
+OS DRIVE ($($osDrive.MountPoint))
+Recovery Password: $recoveryPassword
+
+"@
+                    $outputText | Out-File -FilePath $recoveryFile -Encoding UTF8
+
+                    Write-Host "BitLocker enabled on OS drive" -ForegroundColor Green
+                    Write-Host "  Recovery password saved to: $recoveryFile" -ForegroundColor Cyan
+                    Write-LogProgress "  Recovery Password: $recoveryPassword" "Info"
+                } else {
+                    Write-Host "BitLocker already enabled on OS drive" -ForegroundColor Green
                 }
-            }
+
+                # Enable on data drives with TPM auto-unlock
+                $dataVolumes = Get-BitLockerVolume | Where-Object { $_.VolumeType -eq "Data" }
+                foreach ($volume in $dataVolumes) {
+                    if ($volume.ProtectionStatus -eq "Off") {
+                        Write-Host "Enabling BitLocker on $($volume.MountPoint) drive..."
+                        Write-LogProgress "  Using TPM auto-unlock with recovery password" "Info"
+
+                        # Enable with recovery password (no manual password needed)
+                        Enable-BitLocker -MountPoint $volume.MountPoint `
+                                        -RecoveryPasswordProtector `
+                                        -EncryptionMethod XtsAes256 `
+                                        -SkipHardwareTest `
+                                        -UsedSpaceOnly
+
+                        # Get the auto-generated recovery password
+                        $dataRecoveryPassword = (Get-BitLockerVolume -MountPoint $volume.MountPoint).KeyProtector |
+                                               Where-Object { $_.KeyProtectorType -eq 'RecoveryPassword' } |
+                                               Select-Object -First 1 -ExpandProperty RecoveryPassword
+
+                        # Enable auto-unlock using TPM from OS drive
+                        Enable-BitLockerAutoUnlock -MountPoint $volume.MountPoint
+
+                        # Append to recovery file
+                        $dataOutput = @"
+DATA DRIVE ($($volume.MountPoint))
+Recovery Password: $dataRecoveryPassword
+Auto-Unlock: Enabled (TPM)
+
+"@
+                        $dataOutput | Out-File -FilePath $recoveryFile -Append -Encoding UTF8
+
+                        Write-Host "BitLocker enabled on $($volume.MountPoint)" -ForegroundColor Green
+                        Write-Host "  Auto-unlock enabled via TPM" -ForegroundColor Green
+                        Write-Host "  Recovery password saved to: $recoveryFile" -ForegroundColor Cyan
+                        Write-LogProgress "  Recovery Password: $dataRecoveryPassword" "Info"
+                    }
+                }
+
+                if (Test-Path $recoveryFile) {
+                    Write-Host ""
+                    Write-Host "IMPORTANT: BitLocker recovery passwords saved to:" -ForegroundColor Yellow
+                    Write-Host "  $recoveryFile" -ForegroundColor Yellow
+                    Write-Host "Store this file securely - you'll need it to recover encrypted drives!" -ForegroundColor Yellow
+                }
             } else {
                 Write-Host "No TPM detected - skipping BitLocker" -ForegroundColor Yellow
             }
