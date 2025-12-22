@@ -1239,7 +1239,7 @@ try {
             if ($tpm) {
                 # Enable BitLocker on OS drive
                 $osDrive = Get-BitLockerVolume | Where-Object { $_.VolumeType -eq "OperatingSystem" }
-            if ($osDrive.ProtectionStatus -eq "Off") {
+                if ($osDrive.ProtectionStatus -eq "Off") {
                 Write-Host "Enabling BitLocker on OS drive..."
                 Enable-BitLocker -MountPoint $osDrive.MountPoint -TpmProtector -EncryptionMethod AES256
                 Add-BitLockerKeyProtector -MountPoint $osDrive.MountPoint -RecoveryPasswordProtector
