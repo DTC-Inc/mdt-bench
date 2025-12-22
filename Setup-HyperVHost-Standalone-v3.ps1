@@ -1312,8 +1312,39 @@ Recovery Password: $recoveryPassword
                     Write-Host "BitLocker already enabled on OS drive" -ForegroundColor Green
                 }
 
-                # Enable on data drives with TPM auto-unlock
-                $dataVolumes = Get-BitLockerVolume | Where-Object { $_.VolumeType -eq "Data" }
+                # Enable on data drives with TPM auto-unlock (skip external/removable drives)
+                $allDataVolumes = Get-BitLockerVolume | Where-Object { $_.VolumeType -eq "Data" }
+
+                # Filter out external/removable drives
+                $dataVolumes = @()
+                foreach ($vol in $allDataVolumes) {
+                    try {
+                        $partition = Get-Partition | Where-Object { $_.DriveLetter -eq $vol.MountPoint.TrimEnd(':') } | Select-Object -First 1
+                        if ($partition) {
+                            $disk = Get-Disk -Number $partition.DiskNumber -ErrorAction SilentlyContinue
+
+                            # Skip if disk is removable or USB
+                            if ($disk.BusType -eq 'USB' -or $disk.BusType -eq 'SD' -or $disk.BusType -eq 'MMC') {
+                                Write-LogProgress "  Skipping external drive $($vol.MountPoint) (BusType: $($disk.BusType))" "Info"
+                                continue
+                            }
+
+                            # Include this volume
+                            $dataVolumes += $vol
+                        }
+                    } catch {
+                        Write-LogProgress "  Could not check if $($vol.MountPoint) is external: $_" "Warning"
+                        # Include volume if we can't determine (safer than skipping internal drives)
+                        $dataVolumes += $vol
+                    }
+                }
+
+                if ($dataVolumes.Count -gt 0) {
+                    Write-LogProgress "Found $($dataVolumes.Count) internal data volume(s) for BitLocker encryption" "Info"
+                } else {
+                    Write-LogProgress "No internal data volumes found to encrypt" "Info"
+                }
+
                 foreach ($volume in $dataVolumes) {
                     if ($volume.ProtectionStatus -eq "Off") {
                         Write-Host "Enabling BitLocker on $($volume.MountPoint) drive..."
