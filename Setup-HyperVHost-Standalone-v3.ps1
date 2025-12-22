@@ -484,7 +484,7 @@ try {
                         # Try BITS transfer first for better reliability
                         try {
                             $bitsJob = Start-BitsTransfer -Source $url -Destination $download.File `
-                                -DisplayName $download.Name -Priority Normal -AsJob -ErrorAction Stop
+                                -DisplayName $download.Name -Priority Normal -Asynchronous -ErrorAction Stop
 
                             Write-LogProgress "    BITS transfer started (Job ID: $($bitsJob.JobId))" "Debug"
 
