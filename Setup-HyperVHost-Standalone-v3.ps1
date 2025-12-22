@@ -1093,13 +1093,21 @@ try {
         # Clean up any existing virtual switches
         Get-VMSwitch -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "SET*" } | Remove-VMSwitch -Force -ErrorAction SilentlyContinue
 
-        # Get network adapters
-        $adapters = Get-NetAdapter | Where-Object {
-            $_.Status -eq 'Up' -and
+        # Get ALL network adapters first for debugging
+        $allAdapters = Get-NetAdapter | Where-Object {
             $_.Virtual -eq $false -and
             $_.InterfaceDescription -notlike "*Virtual*" -and
             $_.InterfaceDescription -notlike "*Hyper-V*"
         }
+
+        Write-LogProgress "Found $($allAdapters.Count) physical network adapter(s) total:" "Debug"
+        foreach ($adapter in $allAdapters) {
+            Write-LogProgress "  - $($adapter.Name): $($adapter.InterfaceDescription) [Status: $($adapter.Status), Speed: $($adapter.LinkSpeed)]" "Debug"
+        }
+
+        # Filter for adapters that are UP (connected)
+        $adapters = $allAdapters | Where-Object { $_.Status -eq 'Up' }
+        Write-LogProgress "Found $($adapters.Count) adapter(s) with Status='Up' (connected with cable)" "Info"
 
         if ($adapters.Count -ge 2) {
             Write-Host "Found $($adapters.Count) network adapters available for teaming"
