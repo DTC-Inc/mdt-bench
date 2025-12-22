@@ -499,10 +499,10 @@ try {
                         "https://public-dtc.s3.us-west-002.backblazeb2.com/repo/vendors/dell/OM-iSM-Dell-Web-X64-5.4.2.0-4048.exe"
                     )
                     File = "$env:WINDIR\temp\iSM_Setup.exe"
-                    IsExtractor = $true  # This exe extracts then installs
-                    ExtractPath = "C:\Dell\iSM"  # Typical Dell extraction path
-                    ActualSetup = "C:\Dell\iSM\setup.exe"  # You'll verify this path after first run
-                    Args = "/qn"  # Completely silent installation
+                    IsExtractor = $true  # This exe extracts to C:\OpenManage\iSM
+                    ExtractPath = "C:\OpenManage\iSM"
+                    ActualSetup = "C:\OpenManage\iSM\windows\idracsvcmod.msi"
+                    Args = "/qn"  # Completely silent MSI installation
                     ShowWindow = $false
                 },
                 @{
