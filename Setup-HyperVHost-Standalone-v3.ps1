@@ -452,16 +452,7 @@ try {
                     IsExtractor = $true  # This exe extracts to C:\OpenManage
                     ExtractPath = "C:\OpenManage"
                     ActualSetup = "C:\OpenManage\windows\setup.exe"
-                    Args = "/qb"  # Basic UI with progress bar instead of silent
-                    ShowWindow = $true
-                },
-                @{
-                    Name = "iDRAC Tools"
-                    Urls = @(
-                        "https://public-dtc.s3.us-west-002.backblazeb2.com/repo/vendors/dell/Dell-iDRACTools-Web-WINX64-11.4.0.0-1435_A00.exe"
-                    )
-                    File = "$env:WINDIR\temp\ISM_Setup.exe"
-                    Args = "/qb"  # Basic UI with progress bar instead of silent
+                    Args = "/qb"  # Basic UI with progress bar
                     ShowWindow = $true
                 },
                 @{
@@ -470,8 +461,8 @@ try {
                         "https://public-dtc.s3.us-west-002.backblazeb2.com/repo/vendors/dell/Systems-Management_Application_W7K0J_WN64_2.1.2.0_A01.EXE"
                     )
                     File = "$env:WINDIR\temp\DSU_Setup.exe"
-                    Args = "/passive"  # Passive mode shows progress
-                    ShowWindow = $true
+                    Args = "/s"  # Silent installation
+                    ShowWindow = $false
                 }
             )
 
