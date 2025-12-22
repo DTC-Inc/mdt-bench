@@ -1060,35 +1060,51 @@ try {
                 # Auto-configure teams
                 Write-Host "Auto-configuring network teams..."
 
-                $nicDetails = Get-NICDetails
-                $nicsByBus = $nicDetails | Where-Object { $_.Status -eq "Up" } | Group-Object PCIBus
+                # Simple approach: Just team all available NICs in groups of $TeamsOf
+                Write-LogProgress "Creating teams from $($adapters.Count) available NICs in groups of $TeamsOf..." "Info"
 
                 $teamNumber = 1
-                foreach ($busGroup in $nicsByBus) {
-                    if ($busGroup.Count -ge 2) {
-                        $teamNics = $busGroup.Group | Select-Object -First $TeamsOf
-                        $nicNames = $teamNics.Name
+                $adapterIndex = 0
 
-                        Write-Host "Creating SET$teamNumber with NICs: $($nicNames -join ', ')"
+                while ($adapterIndex + $TeamsOf <= $adapters.Count) {
+                    # Get the next group of NICs
+                    $teamAdapters = $adapters[$adapterIndex..($adapterIndex + $TeamsOf - 1)]
+                    $nicNames = $teamAdapters.Name
 
-                        try {
-                            New-VMSwitch -Name "SET$teamNumber" `
-                                        -NetAdapterName $nicNames `
-                                        -EnableEmbeddedTeaming $true `
-                                        -AllowManagementOS $true
+                    Write-Host "Creating SET$teamNumber with NICs: $($nicNames -join ', ')"
+                    Write-LogProgress "  NIC Details:" "Debug"
+                    foreach ($nic in $teamAdapters) {
+                        Write-LogProgress "    - $($nic.Name): $($nic.InterfaceDescription) ($($nic.LinkSpeed))" "Debug"
+                    }
 
-                            Rename-VMNetworkAdapter -Name "SET$teamNumber" -NewName "vNIC-Mgmt-SET$teamNumber" -ManagementOS
+                    try {
+                        New-VMSwitch -Name "SET$teamNumber" `
+                                    -NetAdapterName $nicNames `
+                                    -EnableEmbeddedTeaming $true `
+                                    -AllowManagementOS $true -ErrorAction Stop
 
-                            Write-Host "Created SET$teamNumber successfully" -ForegroundColor Green
-                            $teamNumber++
-                        } catch {
-                            Write-Host "Failed to create SET${teamNumber}: $_" -ForegroundColor Yellow
-                        }
+                        Rename-VMNetworkAdapter -Name "SET$teamNumber" -NewName "vNIC-Mgmt-SET$teamNumber" -ManagementOS
+
+                        Write-Host "Created SET$teamNumber successfully" -ForegroundColor Green
+                        $teamNumber++
+                        $adapterIndex += $TeamsOf
+                    } catch {
+                        Write-LogProgress "Failed to create SET${teamNumber}: $_" "Error"
+                        Write-Host "Failed to create SET${teamNumber} - stopping team creation" -ForegroundColor Yellow
+                        break
                     }
                 }
 
+                # Handle leftover NICs if any
+                $remainingNICs = $adapters.Count - $adapterIndex
+                if ($remainingNICs -gt 0) {
+                    Write-LogProgress "$remainingNICs NIC(s) not teamed (need $TeamsOf for a team)" "Warning"
+                }
+
                 if ($teamNumber -eq 1) {
-                    Write-Host "No teams created - may need manual configuration" -ForegroundColor Yellow
+                    Write-Host "No teams created - check logs for details" -ForegroundColor Yellow
+                } else {
+                    Write-Host "Created $($teamNumber - 1) team(s) successfully" -ForegroundColor Green
                 }
             } else {
                 # Manual mode
