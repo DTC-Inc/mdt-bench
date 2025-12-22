@@ -1078,7 +1078,7 @@ try {
                 $teamNumber = 1
                 $adapterIndex = 0
 
-                while ($adapterIndex + $TeamsOf <= $adapters.Count) {
+                while ($adapterIndex + $TeamsOf -le $adapters.Count) {
                     # Get the next group of NICs
                     $teamAdapters = $adapters[$adapterIndex..($adapterIndex + $TeamsOf - 1)]
                     $nicNames = $teamAdapters.Name
