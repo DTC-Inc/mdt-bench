@@ -496,7 +496,7 @@ try {
                 @{
                     Name = "iDRAC Service Module (iSM)"
                     Urls = @(
-                        "https://public-dtc.s3.us-west-002.backblazeb2.com/repo/vendors/dell/OSM-iSM-Dell-Web-X64-5.4.2.0-4048.exe"
+                        "https://public-dtc.s3.us-west-002.backblazeb2.com/repo/vendors/dell/OM-iSM-Dell-Web-X64-5.4.2.0-4048.exe"
                     )
                     File = "$env:WINDIR\temp\iSM_Setup.exe"
                     IsExtractor = $true  # This exe extracts then installs
