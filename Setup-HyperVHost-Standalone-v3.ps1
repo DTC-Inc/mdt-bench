@@ -1266,9 +1266,19 @@ try {
     Write-Host "  Name: $NewComputerName"
     Write-Host "  Company: $CompanyName"
     Write-Host "  Hyper-V: Installed and Configured"
-    if (!$SkipNetworkTeaming) {
-        Write-Host "  Network: SET Teams Configured"
+
+    # Check if network teams actually exist
+    $existingTeams = Get-VMSwitch -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "SET*" }
+    if ($existingTeams) {
+        Write-Host "  Network: $($existingTeams.Count) SET Team(s) Configured" -ForegroundColor Green
+        foreach ($team in $existingTeams) {
+            $memberCount = ($team.NetAdapterInterfaceDescription | Measure-Object).Count
+            Write-Host "    - $($team.Name): $memberCount NIC(s)" -ForegroundColor Gray
+        }
+    } elseif (!$SkipNetworkTeaming) {
+        Write-Host "  Network: No teams created - manual configuration may be needed" -ForegroundColor Yellow
     }
+
     Write-Host ""
 
     if ($dataDrive) {
