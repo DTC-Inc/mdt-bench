@@ -454,8 +454,8 @@ try {
                     IsExtractor = $true  # This exe extracts to C:\OpenManage
                     ExtractPath = "C:\OpenManage"
                     ActualSetup = "C:\OpenManage\windows\setup.exe"
-                    Args = "/qb"  # Basic UI with progress bar
-                    ShowWindow = $true
+                    Args = "/qn"  # Completely silent installation
+                    ShowWindow = $false
                 },
                 @{
                     Name = "Dell System Update"
@@ -1130,6 +1130,19 @@ try {
         Write-LogProgress "Verify time zone name with 'Get-TimeZone -ListAvailable'" "Info"
     }
 
+    # Enable LocalAccountTokenFilterPolicy for workgroup admin share access
+    Write-LogProgress "Configuring LocalAccountTokenFilterPolicy for admin share access..." "Info"
+    try {
+        $regPath = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+        if (!(Test-Path $regPath)) {
+            New-Item -Path $regPath -Force | Out-Null
+        }
+        Set-ItemProperty -Path $regPath -Name 'LocalAccountTokenFilterPolicy' -Value 1 -Type DWord -Force
+        Write-LogProgress "LocalAccountTokenFilterPolicy enabled - admin shares accessible for local accounts" "Success"
+    } catch {
+        Write-LogProgress "Failed to set LocalAccountTokenFilterPolicy: $_" "Warning"
+    }
+
     # Enable registry backup
     New-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Session Manager\Configuration Manager\' `
                     -Name 'EnablePeriodicBackup' -PropertyType DWORD -Value 0x00000001 -Force -ErrorAction SilentlyContinue | Out-Null
@@ -1165,10 +1178,24 @@ try {
     if (!$SkipBitLocker) {
         Start-ProgressStep "BitLocker Configuration"
 
-        $tpm = Get-WmiObject -Namespace "Root\CIMv2\Security\MicrosoftTpm" -Class Win32_Tpm -ErrorAction SilentlyContinue
-        if ($tpm) {
-            # Enable BitLocker on OS drive
-            $osDrive = Get-BitLockerVolume | Where-Object { $_.VolumeType -eq "OperatingSystem" }
+        # Import BitLocker module
+        Write-LogProgress "Importing BitLocker PowerShell module..." "Info"
+        try {
+            Import-Module BitLocker -ErrorAction Stop
+            Write-LogProgress "BitLocker module loaded successfully" "Success"
+        } catch {
+            Write-LogProgress "Failed to import BitLocker module: $_" "Error"
+            Write-LogProgress "BitLocker features may not be installed yet - skipping BitLocker configuration" "Warning"
+            Write-Host "BitLocker configuration skipped - module not available" -ForegroundColor Yellow
+            Write-Host "This may require a reboot for BitLocker features to become available" -ForegroundColor Yellow
+        }
+
+        # Check if module was imported successfully
+        if (Get-Module -Name BitLocker) {
+            $tpm = Get-WmiObject -Namespace "Root\CIMv2\Security\MicrosoftTpm" -Class Win32_Tpm -ErrorAction SilentlyContinue
+            if ($tpm) {
+                # Enable BitLocker on OS drive
+                $osDrive = Get-BitLockerVolume | Where-Object { $_.VolumeType -eq "OperatingSystem" }
             if ($osDrive.ProtectionStatus -eq "Off") {
                 Write-Host "Enabling BitLocker on OS drive..."
                 Enable-BitLocker -MountPoint $osDrive.MountPoint -TpmProtector -EncryptionMethod AES256
@@ -1189,8 +1216,9 @@ try {
                     Write-Host "BitLocker enabled on $($volume.MountPoint)" -ForegroundColor Green
                 }
             }
-        } else {
-            Write-Host "No TPM detected - skipping BitLocker" -ForegroundColor Yellow
+            } else {
+                Write-Host "No TPM detected - skipping BitLocker" -ForegroundColor Yellow
+            }
         }
     } else {
         Write-Host ""
