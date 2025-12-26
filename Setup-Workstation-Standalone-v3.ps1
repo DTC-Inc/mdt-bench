@@ -13,6 +13,7 @@
     RMM Variables:
     - $RMM: Set to 1 for RMM mode (no prompts)
     - $CompanyName: Company name for branding (default: DTC)
+    - $NewComputerName: New computer name (optional, leave blank to keep current name)
     - $SkipWindowsUpdate: Skip Windows Updates (default: false)
     - $SkipBitLocker: Skip BitLocker configuration (default: false)
     - $SkipDebloat: Skip all debloat operations (default: false)
@@ -28,6 +29,7 @@
 ## PLEASE COMMENT YOUR VARIABLES DIRECTLY BELOW HERE IF YOU'RE RUNNING FROM A RMM
 ## $RMM = 1
 ## $CompanyName = "DTC"
+## $NewComputerName = ""                # Leave blank to keep current name
 ## $SkipWindowsUpdate = $false
 ## $SkipBitLocker = $false
 ## $SkipDebloat = $false
@@ -38,6 +40,7 @@
 ## SECTION 2: INPUT HANDLING
 # Initialize variables with defaults if not set
 if ($null -eq $CompanyName) { $CompanyName = "DTC" }
+if ($null -eq $NewComputerName) { $NewComputerName = "" }
 if ($null -eq $SkipWindowsUpdate) { $SkipWindowsUpdate = $false }
 if ($null -eq $SkipBitLocker) { $SkipBitLocker = $false }
 if ($null -eq $SkipDebloat) { $SkipDebloat = $false }
@@ -56,13 +59,22 @@ if ($RMM -ne 1) {
     Write-Host "Interactive Mode" -ForegroundColor Yellow
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "Computer Name: $env:COMPUTERNAME" -ForegroundColor Green
-    Write-Host "(Workstations retain existing names)" -ForegroundColor Gray
+    Write-Host "Current Computer Name: $env:COMPUTERNAME" -ForegroundColor Green
     Write-Host ""
 
     # Get company name
     $input = Read-Host "Enter company name (default: DTC)"
     if (![string]::IsNullOrEmpty($input)) { $CompanyName = $input }
+
+    # Ask about computer renaming
+    $response = Read-Host "Rename this computer? (y/n, default: n)"
+    if ($response -eq 'y') {
+        $input = Read-Host "Enter new computer name"
+        if (![string]::IsNullOrEmpty($input)) {
+            $NewComputerName = $input
+            Write-Host "Computer will be renamed to: $NewComputerName" -ForegroundColor Yellow
+        }
+    }
 
     # Ask about debloat options
     $response = Read-Host "Remove Windows default apps? (y/n, default: n)"
@@ -99,8 +111,10 @@ if ($RMM -ne 1) {
     Write-Host "RMM Mode - Non-Interactive" -ForegroundColor Yellow
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "Computer Name: $env:COMPUTERNAME" -ForegroundColor Green
-    Write-Host "(Workstations retain existing names)" -ForegroundColor Gray
+    Write-Host "Current Computer Name: $env:COMPUTERNAME" -ForegroundColor Green
+    if (![string]::IsNullOrEmpty($NewComputerName)) {
+        Write-Host "Will be renamed to: $NewComputerName" -ForegroundColor Yellow
+    }
 
     $Description = "RMM-initiated workstation setup for $CompanyName"
 
@@ -148,8 +162,13 @@ Write-Host "Description: $Description"
 Write-Host "Log Path: $LogFile"
 Write-Host "RMM Mode: $(if ($RMM -eq 1) { 'Yes' } else { 'No' })"
 Write-Host "Company Name: $CompanyName"
+Write-Host "Current Computer Name: $env:COMPUTERNAME"
+if (![string]::IsNullOrEmpty($NewComputerName)) {
+    Write-Host "New Computer Name: $NewComputerName" -ForegroundColor Yellow
+}
 Write-Host ""
 Write-Host "Configuration Options:" -ForegroundColor Yellow
+Write-Host "  Rename Computer: $(if (![string]::IsNullOrEmpty($NewComputerName)) { $NewComputerName } else { 'No' })"
 Write-Host "  Skip Debloat: $SkipDebloat"
 Write-Host "  Remove Default Apps: $RemoveDefaultApps"
 Write-Host "  Remove OneDrive: $RemoveOneDrive"
@@ -163,6 +182,33 @@ $ErrorActionPreference = "Stop"
 $RestartRequired = $false
 
 try {
+    #region Computer Renaming
+    if (![string]::IsNullOrEmpty($NewComputerName)) {
+        Write-Host "Step 0: Computer Renaming..." -ForegroundColor Cyan
+
+        if ($env:COMPUTERNAME -ne $NewComputerName) {
+            Write-Host "Renaming computer from '$env:COMPUTERNAME' to '$NewComputerName'..." -ForegroundColor Yellow
+            try {
+                Rename-Computer -NewName $NewComputerName -Force -ErrorAction Stop
+                Write-Host "Computer renamed successfully to '$NewComputerName'" -ForegroundColor Green
+                Write-Host "A restart is required for the name change to take effect" -ForegroundColor Yellow
+                $RestartRequired = $true
+            } catch {
+                Write-Host "Failed to rename computer: $_" -ForegroundColor Red
+                if ($RMM -ne 1) {
+                    $continue = Read-Host "Failed to rename computer. Continue anyway? (y/n)"
+                    if ($continue -ne 'y') {
+                        throw "Setup cancelled due to computer rename failure"
+                    }
+                }
+            }
+        } else {
+            Write-Host "Computer name already set to '$NewComputerName'" -ForegroundColor Green
+        }
+        Write-Host ""
+    }
+    #endregion
+
     #region Windows Configuration
     Write-Host "Step 1: Configuring Windows Settings..." -ForegroundColor Cyan
     try {
