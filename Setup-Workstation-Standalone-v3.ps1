@@ -19,7 +19,6 @@
     - $SkipDebloat: Skip all debloat operations (default: false)
     - $RemoveOneDrive: Completely remove OneDrive (default: false)
     - $RemoveDefaultApps: Remove Windows default apps (default: false)
-    - $AggressiveDebloat: Maximum optimization (default: false)
 #>
 
 #Requires -RunAsAdministrator
@@ -35,7 +34,6 @@
 ## $SkipDebloat = $false
 ## $RemoveOneDrive = $false
 ## $RemoveDefaultApps = $false
-## $AggressiveDebloat = $false
 
 ## SECTION 2: INPUT HANDLING
 # Initialize variables with defaults if not set
@@ -46,7 +44,6 @@ if ($null -eq $SkipBitLocker) { $SkipBitLocker = $false }
 if ($null -eq $SkipDebloat) { $SkipDebloat = $false }
 if ($null -eq $RemoveOneDrive) { $RemoveOneDrive = $false }
 if ($null -eq $RemoveDefaultApps) { $RemoveDefaultApps = $false }
-if ($null -eq $AggressiveDebloat) { $AggressiveDebloat = $false }
 
 # Script name for logging
 $ScriptLogName = "Workstation-Setup-v3"
@@ -82,9 +79,6 @@ if ($RMM -ne 1) {
 
     $response = Read-Host "Remove OneDrive completely? (y/n, default: n)"
     if ($response -eq 'y') { $RemoveOneDrive = $true }
-
-    $response = Read-Host "Apply aggressive debloat (maximum optimization)? (y/n, default: n)"
-    if ($response -eq 'y') { $AggressiveDebloat = $true }
 
     $response = Read-Host "Skip all debloat operations? (y/n, default: n)"
     if ($response -eq 'y') { $SkipDebloat = $true }
@@ -172,7 +166,6 @@ Write-Host "  Rename Computer: $(if (![string]::IsNullOrEmpty($NewComputerName))
 Write-Host "  Skip Debloat: $SkipDebloat"
 Write-Host "  Remove Default Apps: $RemoveDefaultApps"
 Write-Host "  Remove OneDrive: $RemoveOneDrive"
-Write-Host "  Aggressive Debloat: $AggressiveDebloat"
 Write-Host "  Skip Windows Update: $SkipWindowsUpdate"
 Write-Host "  Skip BitLocker: $SkipBitLocker"
 Write-Host ""
@@ -680,13 +673,6 @@ try {
 
         foreach ($task in $tasks) {
             Disable-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
-        }
-
-        # Disable Windows Search indexing for better performance (if aggressive)
-        if ($AggressiveDebloat) {
-            Stop-Service "WSearch" -Force -ErrorAction SilentlyContinue
-            Set-Service "WSearch" -StartupType Disabled
-            Write-Host "Windows Search disabled (aggressive optimization)" -ForegroundColor Yellow
         }
 
         Write-Host "Performance optimizations completed" -ForegroundColor Green
