@@ -173,8 +173,133 @@ try {
         # Enable System Restore
         Enable-ComputerRestore -Drive "$env:SYSTEMDRIVE\"
 
-        # Set power plan to High Performance
-        powercfg -setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
+        # Detect if this is a laptop
+        $chassisTypes = (Get-CimInstance -ClassName Win32_SystemEnclosure).ChassisTypes
+        # Laptop chassis types: 8=Portable, 9=Laptop, 10=Notebook, 14=Sub Notebook, 31=Convertible, 32=Detachable
+        $laptopChassisTypes = @(8, 9, 10, 14, 31, 32)
+        $IsLaptop = $false
+        foreach ($type in $chassisTypes) {
+            if ($laptopChassisTypes -contains $type) {
+                $IsLaptop = $true
+                break
+            }
+        }
+        Write-Host "Device Type: $(if ($IsLaptop) { 'Laptop' } else { 'Desktop' })" -ForegroundColor Cyan
+
+        #region Power Management Configuration
+        Write-Host "Configuring power management settings..." -ForegroundColor Cyan
+
+        # Get all power schemes
+        $powerSchemes = powercfg /list | Where-Object { $_ -match "GUID: ([a-f0-9\-]+)" } | ForEach-Object {
+            if ($_ -match "GUID: ([a-f0-9\-]+)\s+\((.+?)\)(?:\s+\*)?") {
+                [PSCustomObject]@{
+                    GUID = $matches[1]
+                    Name = $matches[2].Trim()
+                    IsActive = $_ -match "\*$"
+                }
+            }
+        }
+
+        Write-Host "Found $($powerSchemes.Count) power scheme(s)" -ForegroundColor Gray
+
+        # Disable Fast Startup globally via registry
+        Write-Host "  Disabling Fast Startup..." -ForegroundColor White
+        $fastStartupRegPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power"
+        if (!(Test-Path $fastStartupRegPath)) {
+            New-Item -Path $fastStartupRegPath -Force | Out-Null
+        }
+        Set-ItemProperty -Path $fastStartupRegPath -Name "HiberbootEnabled" -Value 0 -Type DWord
+
+        # Hibernation: Disable on desktops, keep on laptops
+        if ($IsLaptop) {
+            Write-Host "  Keeping hibernation enabled (laptop detected)" -ForegroundColor White
+        } else {
+            Write-Host "  Disabling hibernation (desktop detected)..." -ForegroundColor White
+            powercfg /hibernate off 2>&1 | Out-Null
+        }
+
+        # Configure power settings for each scheme
+        foreach ($scheme in $powerSchemes) {
+            Write-Host "  Configuring power scheme: $($scheme.Name)" -ForegroundColor Gray
+
+            # Power setting GUIDs
+            # SUB_SLEEP = 238C9FA8-0AAD-41ED-83F4-97BE242C8F20
+            # HYBRIDSLEEP = 94ac6d29-73ce-41a6-809f-6363ba21b47e
+            # STANDBYIDLE = 29f6c1db-86da-48c5-9fdb-f2b67b1f44da
+            # UNATTENDSLEEP = 7bc4a2f9-d8fc-4469-b07b-33eb785aaca0
+            # WAKETIMERS = BD3B718A-0680-4D9D-8AB2-E1D2B4AC806D
+            # SUB_DISK = 0012EE47-9041-4B5D-9B77-535FBA8B1442
+            # DISKIDLE = 6738E2C4-E8A5-4A42-B16A-E040E769756E
+            # SUB_BUTTONS = 4F971E89-EEBD-4455-A8DE-9E59040E7347
+            # LIDACTION = 5ca83367-6e45-459f-a27b-476b1d01c936
+            # SUB_BATTERY = E73A048D-BF27-4F12-9731-8B2076E8891F
+            # CRITBATTERYACTION = 637ea02f-bbcb-4015-8e2c-a1c7b9c0b546
+            # SUB_USB = 2A737441-1930-4402-8D77-B2BEBBA308A3
+            # USBSELECTIVESUSPEND = 48E6B7A6-50F5-4782-A5D4-53BB8F07E226
+            # SUB_PCIEXPRESS = 501A4D13-42AF-4429-9FD1-A8218C268E20
+            # ASPM = EE12F906-D277-404B-B6DA-E5FA1A576DF5
+            # SUB_RADIO = 19cbb8fa-5279-450e-9fac-8a3d5fedd0c1
+            # RADIOPS = 12bbebe6-58d6-4636-95bb-3217ef867c1a
+            # SUB_MULTIMEDIA = 9596fb26-9850-41fd-ac3e-f7c3c00afd4b
+            # VIDEOQUALITYBIAS = 10778347-1370-4ee0-8bbd-33bdacaade49
+            # WHENPLAYINGVIDEO = 34C7B99F-9A6D-4b3c-8DC7-B6693B78CEF4
+
+            # Disable hybrid sleep
+            powercfg /setacvalueindex $($scheme.GUID) 238C9FA8-0AAD-41ED-83F4-97BE242C8F20 94ac6d29-73ce-41a6-809f-6363ba21b47e 0 | Out-Null
+            powercfg /setdcvalueindex $($scheme.GUID) 238C9FA8-0AAD-41ED-83F4-97BE242C8F20 94ac6d29-73ce-41a6-809f-6363ba21b47e 0 | Out-Null
+
+            # Disable hard disk turn off
+            powercfg /setacvalueindex $($scheme.GUID) 0012EE47-9041-4B5D-9B77-535FBA8B1442 6738E2C4-E8A5-4A42-B16A-E040E769756E 0 | Out-Null
+            powercfg /setdcvalueindex $($scheme.GUID) 0012EE47-9041-4B5D-9B77-535FBA8B1442 6738E2C4-E8A5-4A42-B16A-E040E769756E 0 | Out-Null
+
+            # Disable automatic sleep
+            powercfg /setacvalueindex $($scheme.GUID) 238C9FA8-0AAD-41ED-83F4-97BE242C8F20 29f6c1db-86da-48c5-9fdb-f2b67b1f44da 0 | Out-Null
+            powercfg /setdcvalueindex $($scheme.GUID) 238C9FA8-0AAD-41ED-83F4-97BE242C8F20 29f6c1db-86da-48c5-9fdb-f2b67b1f44da 0 | Out-Null
+
+            # Disable unattended sleep timeout
+            powercfg /setacvalueindex $($scheme.GUID) 238C9FA8-0AAD-41ED-83F4-97BE242C8F20 7bc4a2f9-d8fc-4469-b07b-33eb785aaca0 0 | Out-Null
+            powercfg /setdcvalueindex $($scheme.GUID) 238C9FA8-0AAD-41ED-83F4-97BE242C8F20 7bc4a2f9-d8fc-4469-b07b-33eb785aaca0 0 | Out-Null
+
+            # Lid close action: Sleep (for laptops)
+            # 0=Do nothing, 1=Sleep, 2=Hibernate, 3=Shut down
+            powercfg /setacvalueindex $($scheme.GUID) 4F971E89-EEBD-4455-A8DE-9E59040E7347 5CA83367-6E45-459F-A27B-476B1D01C936 1 | Out-Null
+            powercfg /setdcvalueindex $($scheme.GUID) 4F971E89-EEBD-4455-A8DE-9E59040E7347 5CA83367-6E45-459F-A27B-476B1D01C936 1 | Out-Null
+
+            # Critical battery action: Hibernate for laptops, Shutdown for desktops
+            # 0=Do nothing, 1=Sleep, 2=Hibernate, 3=Shut down
+            if ($IsLaptop) {
+                powercfg /setdcvalueindex $($scheme.GUID) E73A048D-BF27-4F12-9731-8B2076E8891F 637EA02F-BBCB-4015-8E2C-A1C7B9C0B546 2 | Out-Null
+            } else {
+                powercfg /setdcvalueindex $($scheme.GUID) E73A048D-BF27-4F12-9731-8B2076E8891F 637EA02F-BBCB-4015-8E2C-A1C7B9C0B546 3 | Out-Null
+            }
+
+            # Disable USB selective suspend
+            powercfg /setacvalueindex $($scheme.GUID) 2A737441-1930-4402-8D77-B2BEBBA308A3 48E6B7A6-50F5-4782-A5D4-53BB8F07E226 0 | Out-Null
+            powercfg /setdcvalueindex $($scheme.GUID) 2A737441-1930-4402-8D77-B2BEBBA308A3 48E6B7A6-50F5-4782-A5D4-53BB8F07E226 0 | Out-Null
+
+            # Disable PCIE Link State Power Management (ASPM)
+            powercfg /setacvalueindex $($scheme.GUID) 501A4D13-42AF-4429-9FD1-A8218C268E20 EE12F906-D277-404B-B6DA-E5FA1A576DF5 0 | Out-Null
+            powercfg /setdcvalueindex $($scheme.GUID) 501A4D13-42AF-4429-9FD1-A8218C268E20 EE12F906-D277-404B-B6DA-E5FA1A576DF5 0 | Out-Null
+
+            # Enable wake timers
+            powercfg /setacvalueindex $($scheme.GUID) 238C9FA8-0AAD-41ED-83F4-97BE242C8F20 BD3B718A-0680-4D9D-8AB2-E1D2B4AC806D 1 2>&1 | Out-Null
+            powercfg /setdcvalueindex $($scheme.GUID) 238C9FA8-0AAD-41ED-83F4-97BE242C8F20 BD3B718A-0680-4D9D-8AB2-E1D2B4AC806D 1 2>&1 | Out-Null
+
+            # Wireless adapter: Maximum performance
+            powercfg /setacvalueindex $($scheme.GUID) 19cbb8fa-5279-450e-9fac-8a3d5fedd0c1 12bbebe6-58d6-4636-95bb-3217ef867c1a 0 2>&1 | Out-Null
+            powercfg /setdcvalueindex $($scheme.GUID) 19cbb8fa-5279-450e-9fac-8a3d5fedd0c1 12bbebe6-58d6-4636-95bb-3217ef867c1a 0 2>&1 | Out-Null
+
+            # Video playback: Maximum quality
+            powercfg /setacvalueindex $($scheme.GUID) 9596fb26-9850-41fd-ac3e-f7c3c00afd4b 10778347-1370-4ee0-8bbd-33bdacaade49 1 2>&1 | Out-Null
+            powercfg /setdcvalueindex $($scheme.GUID) 9596fb26-9850-41fd-ac3e-f7c3c00afd4b 10778347-1370-4ee0-8bbd-33bdacaade49 1 2>&1 | Out-Null
+
+            # Multimedia: Optimize video quality
+            powercfg /setacvalueindex $($scheme.GUID) 9596fb26-9850-41fd-ac3e-f7c3c00afd4b 34C7B99F-9A6D-4b3c-8DC7-B6693B78CEF4 0 2>&1 | Out-Null
+            powercfg /setdcvalueindex $($scheme.GUID) 9596fb26-9850-41fd-ac3e-f7c3c00afd4b 34C7B99F-9A6D-4b3c-8DC7-B6693B78CEF4 0 2>&1 | Out-Null
+        }
+
+        Write-Host "Power management configured" -ForegroundColor Green
+        #endregion
 
         Write-Host "Windows configuration completed" -ForegroundColor Green
     } catch {
@@ -548,33 +673,155 @@ try {
     if (!$SkipBitLocker) {
         Write-Host ""
         Write-Host "Step 8: Configuring BitLocker..." -ForegroundColor Cyan
-        try {
-            # Check if TPM is present
-            $tpm = Get-WmiObject -Namespace "Root\CIMv2\Security\MicrosoftTpm" -Class Win32_Tpm -ErrorAction SilentlyContinue
-            if ($tpm) {
-                # Enable BitLocker on OS drive
-                $osDrive = Get-BitLockerVolume | Where-Object { $_.VolumeType -eq "OperatingSystem" }
-                if ($osDrive.ProtectionStatus -eq "Off") {
-                    Enable-BitLocker -MountPoint $osDrive.MountPoint -TpmProtector -EncryptionMethod AES256
-                    Add-BitLockerKeyProtector -MountPoint $osDrive.MountPoint -RecoveryPasswordProtector
-                    Write-Host "BitLocker enabled on OS drive" -ForegroundColor Green
-                }
 
-                # Enable BitLocker on data drives
-                $dataDrives = Get-BitLockerVolume | Where-Object { $_.VolumeType -ne "OperatingSystem" }
-                foreach ($drive in $dataDrives) {
-                    if ($drive.ProtectionStatus -eq "Off") {
-                        Enable-BitLocker -MountPoint $drive.MountPoint -StartupKeyProtector -StartupKeyPath "$env:SYSTEMDRIVE\"
-                        Add-BitLockerKeyProtector -MountPoint $drive.MountPoint -RecoveryPasswordProtector
-                        Enable-BitLockerAutoUnlock -MountPoint $drive.MountPoint
-                        Write-Host "BitLocker enabled on $($drive.MountPoint) drive" -ForegroundColor Green
+        # Check if Windows edition supports BitLocker (Pro, Enterprise, Education)
+        $osInfo = Get-CimInstance -ClassName Win32_OperatingSystem
+        $supportsBitLocker = $osInfo.Caption -match "Pro|Enterprise|Education"
+
+        if (!$supportsBitLocker) {
+            Write-Host "BitLocker not available on this Windows edition ($($osInfo.Caption))" -ForegroundColor Yellow
+            Write-Host "BitLocker requires Windows 11 Pro, Enterprise, or Education" -ForegroundColor Yellow
+        } else {
+            # Check if TPM is present and ready
+            $tpm = Get-WmiObject -Namespace "Root\CIMv2\Security\MicrosoftTpm" -Class Win32_Tpm -ErrorAction SilentlyContinue
+
+            if ($tpm -and $tpm.IsEnabled_InitialValue) {
+                Write-Host "TPM detected and enabled" -ForegroundColor Green
+
+                # Create directory for recovery keys
+                $recoveryKeyPath = "$env:SystemDrive\BitLocker-Recovery-Keys"
+                if (!(Test-Path $recoveryKeyPath)) {
+                    New-Item -Path $recoveryKeyPath -ItemType Directory -Force | Out-Null
+                }
+                $recoveryFile = Join-Path $recoveryKeyPath "BitLocker-Recovery-Passwords-$(Get-Date -Format 'yyyy-MM-dd-HHmmss').txt"
+
+                # Initialize recovery file
+                $outputText = @"
+========================================
+BitLocker Recovery Information
+========================================
+Computer: $env:COMPUTERNAME
+Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+
+"@
+                $outputText | Out-File -FilePath $recoveryFile -Encoding UTF8
+
+                try {
+                    # Enable BitLocker on OS drive
+                    $osDrive = Get-BitLockerVolume | Where-Object { $_.VolumeType -eq "OperatingSystem" }
+
+                    if ($osDrive.ProtectionStatus -eq "Off") {
+                        Write-Host "Enabling BitLocker on OS drive ($($osDrive.MountPoint))..." -ForegroundColor Cyan
+                        Write-Host "  Using XtsAes256 encryption with TPM protector" -ForegroundColor Gray
+
+                        # Enable with TPM and skip hardware test to avoid reboot requirement
+                        Enable-BitLocker -MountPoint $osDrive.MountPoint `
+                                        -TpmProtector `
+                                        -EncryptionMethod XtsAes256 `
+                                        -SkipHardwareTest `
+                                        -UsedSpaceOnly
+
+                        # Add auto-generated recovery password protector
+                        Add-BitLockerKeyProtector -MountPoint $osDrive.MountPoint -RecoveryPasswordProtector
+
+                        # Get the recovery password
+                        $recoveryPassword = (Get-BitLockerVolume -MountPoint $osDrive.MountPoint).KeyProtector |
+                                           Where-Object { $_.KeyProtectorType -eq 'RecoveryPassword' } |
+                                           Select-Object -First 1 -ExpandProperty RecoveryPassword
+
+                        # Append to recovery file
+                        $osOutput = @"
+OS DRIVE ($($osDrive.MountPoint))
+Recovery Password: $recoveryPassword
+
+"@
+                        $osOutput | Out-File -FilePath $recoveryFile -Append -Encoding UTF8
+
+                        Write-Host "BitLocker enabled on OS drive" -ForegroundColor Green
+                        Write-Host "  Recovery password saved to: $recoveryFile" -ForegroundColor Cyan
+                    } else {
+                        Write-Host "BitLocker already enabled on OS drive" -ForegroundColor Green
                     }
+
+                    # Enable on data drives with auto-unlock (skip external/removable drives)
+                    $allDataVolumes = Get-BitLockerVolume | Where-Object { $_.VolumeType -eq "Data" }
+
+                    # Filter out external/removable drives
+                    $dataVolumes = @()
+                    foreach ($vol in $allDataVolumes) {
+                        try {
+                            $partition = Get-Partition | Where-Object { $_.DriveLetter -eq $vol.MountPoint.TrimEnd(':') } | Select-Object -First 1
+                            if ($partition) {
+                                $disk = Get-Disk -Number $partition.DiskNumber -ErrorAction SilentlyContinue
+
+                                # Skip if disk is removable or USB
+                                if ($disk.BusType -eq 'USB' -or $disk.BusType -eq 'SD' -or $disk.BusType -eq 'MMC') {
+                                    Write-Host "  Skipping external drive $($vol.MountPoint) (BusType: $($disk.BusType))" -ForegroundColor Gray
+                                    continue
+                                }
+
+                                # Include this volume
+                                $dataVolumes += $vol
+                            }
+                        } catch {
+                            Write-Host "  Could not check if $($vol.MountPoint) is external: $_" -ForegroundColor Yellow
+                            # Include volume if we can't determine (safer than skipping internal drives)
+                            $dataVolumes += $vol
+                        }
+                    }
+
+                    if ($dataVolumes.Count -gt 0) {
+                        Write-Host "Found $($dataVolumes.Count) internal data volume(s) for BitLocker encryption" -ForegroundColor Gray
+                    }
+
+                    foreach ($volume in $dataVolumes) {
+                        if ($volume.ProtectionStatus -eq "Off") {
+                            Write-Host "Enabling BitLocker on $($volume.MountPoint) drive..." -ForegroundColor Cyan
+
+                            # Enable with recovery password (no manual password needed)
+                            Enable-BitLocker -MountPoint $volume.MountPoint `
+                                            -RecoveryPasswordProtector `
+                                            -EncryptionMethod XtsAes256 `
+                                            -SkipHardwareTest `
+                                            -UsedSpaceOnly
+
+                            # Get the auto-generated recovery password
+                            $dataRecoveryPassword = (Get-BitLockerVolume -MountPoint $volume.MountPoint).KeyProtector |
+                                                   Where-Object { $_.KeyProtectorType -eq 'RecoveryPassword' } |
+                                                   Select-Object -First 1 -ExpandProperty RecoveryPassword
+
+                            # Enable auto-unlock
+                            Enable-BitLockerAutoUnlock -MountPoint $volume.MountPoint
+
+                            # Append to recovery file
+                            $dataOutput = @"
+DATA DRIVE ($($volume.MountPoint))
+Recovery Password: $dataRecoveryPassword
+Auto-Unlock: Enabled
+
+"@
+                            $dataOutput | Out-File -FilePath $recoveryFile -Append -Encoding UTF8
+
+                            Write-Host "BitLocker enabled on $($volume.MountPoint)" -ForegroundColor Green
+                            Write-Host "  Auto-unlock enabled" -ForegroundColor Green
+                            Write-Host "  Recovery password saved to: $recoveryFile" -ForegroundColor Cyan
+                        }
+                    }
+
+                    if (Test-Path $recoveryFile) {
+                        Write-Host ""
+                        Write-Host "IMPORTANT: BitLocker recovery passwords saved to:" -ForegroundColor Yellow
+                        Write-Host "  $recoveryFile" -ForegroundColor Yellow
+                        Write-Host "Store this file securely - you'll need it to recover encrypted drives!" -ForegroundColor Yellow
+                    }
+
+                } catch {
+                    Write-Host "BitLocker configuration error: $_" -ForegroundColor Yellow
                 }
             } else {
-                Write-Host "No TPM detected, skipping BitLocker" -ForegroundColor Yellow
+                Write-Host "No TPM detected or TPM not enabled - skipping BitLocker" -ForegroundColor Yellow
+                Write-Host "BitLocker requires a TPM 2.0 chip for automatic encryption" -ForegroundColor Yellow
             }
-        } catch {
-            Write-Host "BitLocker configuration error: $_" -ForegroundColor Yellow
         }
     } else {
         Write-Host ""
