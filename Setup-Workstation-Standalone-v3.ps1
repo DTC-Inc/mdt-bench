@@ -36,6 +36,36 @@
 ## $RemoveDefaultApps = $false
 
 ## SECTION 2: INPUT HANDLING
+
+# Helper function to convert strings to booleans (RMM platforms often pass strings)
+function ConvertTo-Boolean {
+    param([object]$Value)
+
+    # Already a boolean - return as-is
+    if ($Value -is [bool]) { return $Value }
+
+    # Convert string to boolean
+    if ($Value -is [string]) {
+        switch ($Value.ToLower().Trim()) {
+            "true"  { return $true }
+            "1"     { return $true }
+            "yes"   { return $true }
+            "false" { return $false }
+            "0"     { return $false }
+            "no"    { return $false }
+            default { return $false }  # Default to false for safety
+        }
+    }
+
+    # Numeric conversion
+    if ($Value -is [int] -or $Value -is [long]) {
+        return [bool]$Value
+    }
+
+    # Default to false
+    return $false
+}
+
 # Initialize variables with defaults if not set
 if ($null -eq $CompanyName) { $CompanyName = "DTC" }
 if ($null -eq $NewComputerName) { $NewComputerName = "" }
@@ -44,6 +74,13 @@ if ($null -eq $SkipBitLocker) { $SkipBitLocker = $false }
 if ($null -eq $SkipDebloat) { $SkipDebloat = $false }
 if ($null -eq $RemoveOneDrive) { $RemoveOneDrive = $false }
 if ($null -eq $RemoveDefaultApps) { $RemoveDefaultApps = $false }
+
+# Convert string values to proper booleans (in case RMM passes strings)
+$SkipWindowsUpdate = ConvertTo-Boolean $SkipWindowsUpdate
+$SkipBitLocker = ConvertTo-Boolean $SkipBitLocker
+$SkipDebloat = ConvertTo-Boolean $SkipDebloat
+$RemoveOneDrive = ConvertTo-Boolean $RemoveOneDrive
+$RemoveDefaultApps = ConvertTo-Boolean $RemoveDefaultApps
 
 # Script name for logging
 $ScriptLogName = "Workstation-Setup-v3"
