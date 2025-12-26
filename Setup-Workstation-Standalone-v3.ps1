@@ -474,6 +474,24 @@ try {
             }
 
             Write-Host "Applications installed" -ForegroundColor Green
+
+            # Clean up desktop shortcuts created by installers
+            Write-Host "Cleaning up desktop shortcuts..." -ForegroundColor Cyan
+            $desktopPaths = @(
+                "$env:PUBLIC\Desktop",
+                "$env:USERPROFILE\Desktop"
+            )
+            $shortcutsRemoved = 0
+            foreach ($desktopPath in $desktopPaths) {
+                if (Test-Path $desktopPath) {
+                    $shortcuts = Get-ChildItem -Path $desktopPath -Filter "*.lnk" -ErrorAction SilentlyContinue
+                    foreach ($shortcut in $shortcuts) {
+                        Remove-Item -Path $shortcut.FullName -Force -ErrorAction SilentlyContinue
+                        $shortcutsRemoved++
+                    }
+                }
+            }
+            Write-Host "Removed $shortcutsRemoved desktop shortcut(s)" -ForegroundColor Green
         } else {
             Write-Host "WinGet not available - skipping application installation" -ForegroundColor Yellow
             Write-Host "Please ensure Windows 11 22H2 or later is installed" -ForegroundColor Yellow
