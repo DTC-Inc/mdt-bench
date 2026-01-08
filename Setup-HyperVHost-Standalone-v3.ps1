@@ -471,10 +471,22 @@ try {
         Write-LogProgress "Dell hardware detected - installing Dell OpenManage and tools" "Info"
 
         # Check if already installed
-        $omsaInstalled = Test-Path "C:\Program Files\Dell\SysMgt\oma\bin"
+        $omsaInstalled = Test-Path "C:\Program Files\Dell\SysMgt\oma\bin\omconfig.exe"
+        $ismInstalled = Test-Path "C:\Program Files\Dell\SysMgt\iSM\ism\bin\DellBatteryClient.exe"
+        $dsuInstalled = Test-Path "C:\Program Files\Dell\SysMgt\DSU\dsu.exe"
 
-        if (!$omsaInstalled) {
-            Write-Host "Dell OpenManage not found, installing..."
+        if ($omsaInstalled) {
+            Write-LogProgress "Dell OpenManage Server Administrator already installed" "Success"
+        }
+        if ($ismInstalled) {
+            Write-LogProgress "iDRAC Service Module already installed" "Success"
+        }
+        if ($dsuInstalled) {
+            Write-LogProgress "Dell System Update already installed" "Success"
+        }
+
+        if (!$omsaInstalled -or !$ismInstalled -or !$dsuInstalled) {
+            Write-Host "Installing missing Dell components..."
 
             # Ensure BITS service is running for reliable downloads
             Write-LogProgress "Ensuring BITS service is running..." "Debug"
@@ -489,13 +501,20 @@ try {
                         "https://public-dtc.s3.us-west-002.backblazeb2.com/repo/vendors/dell/OM-SrvAdmin-Dell-Web-WINX64-11.0.1.0-5494_A00.exe"
                     )
                     File = "$env:WINDIR\temp\OMSA_Setup.exe"
-                    IsExtractor = $true  # This exe extracts to C:\OpenManage
+                    IsExtractor = $true
                     ExtractPath = "C:\OpenManage"
                     ActualSetup = "C:\OpenManage\windows\setup.exe"
                     # FIX: Dell OMSA setup.exe requires /auto for silent install, not /qn
                     Args = "/auto"
                     IsMsi = $false
                     ShowWindow = $false
+                    Skip = $omsaInstalled
+                    ValidatePath = "C:\Program Files\Dell\SysMgt\oma\bin\omconfig.exe"
+                    ServiceNames = @("DSM SA Shared Services", "DSM SA Connection Service", "DSM SA Event Manager")
+                    RequiredFiles = @(
+                        "C:\OpenManage\windows\setup.exe",
+                        "C:\OpenManage\windows\setup.ini"
+                    )
                 },
                 @{
                     Name = "iDRAC Service Module (iSM)"
@@ -503,13 +522,19 @@ try {
                         "https://public-dtc.s3.us-west-002.backblazeb2.com/repo/vendors/dell/OM-iSM-Dell-Web-X64-5.4.2.0-4048.exe"
                     )
                     File = "$env:WINDIR\temp\iSM_Setup.exe"
-                    IsExtractor = $true  # This exe extracts to C:\OpenManage\iSM
+                    IsExtractor = $true
                     ExtractPath = "C:\OpenManage\iSM"
                     ActualSetup = "C:\OpenManage\iSM\windows\idracsvcmod.msi"
                     # FIX: MSI arguments for msiexec (will be passed as /i "path" /qn ...)
                     Args = "/qn REBOOT=ReallySuppress"
                     IsMsi = $true  # FIX: Flag to indicate this needs msiexec.exe
                     ShowWindow = $false
+                    Skip = $ismInstalled
+                    ValidatePath = "C:\Program Files\Dell\SysMgt\iSM\ism\bin\DellBatteryClient.exe"
+                    ServiceNames = @("iDRAC Service Module")
+                    RequiredFiles = @(
+                        "C:\OpenManage\iSM\windows\idracsvcmod.msi"
+                    )
                 },
                 @{
                     Name = "Dell System Update"
@@ -520,11 +545,20 @@ try {
                     Args = "/s"  # Silent installation
                     IsMsi = $false
                     ShowWindow = $false
+                    Skip = $dsuInstalled
+                    ValidatePath = "C:\Program Files\Dell\SysMgt\DSU\dsu.exe"
+                    RequiredFiles = @()
                 }
             )
 
             foreach ($download in $downloads) {
+                if ($download.Skip) {
+                    Write-LogProgress "Skipping $($download.Name) - already installed" "Info"
+                    continue
+                }
+
                 $downloadSuccess = $false
+                $installSuccess = $false
 
                 # Try each URL in order until one succeeds
                 foreach ($url in $download.Urls) {
@@ -675,20 +709,108 @@ try {
 
                         # Check exit code
                         $totalTime = [math]::Round(((Get-Date) - $startTime).TotalMinutes, 1)
+                        $exitCode = $process.ExitCode
 
-                        if ($process.ExitCode -eq 0) {
-                            Write-LogProgress "  $($download.Name) installed successfully (took $totalTime minutes)" "Success"
-                        } elseif ($process.ExitCode -eq 3010 -or $process.ExitCode -eq 3011) {
-                            Write-LogProgress "  $($download.Name) installed but requires reboot (exit code: $($process.ExitCode))" "Warning"
-                            Add-RebootReason "$($download.Name) installation"
+                        Write-LogProgress "    Installation completed with exit code: $exitCode (took $totalTime minutes)" "Info"
+
+                        # Common installer exit codes
+                        $successCodes = @(0, 3010, 3011, 1641, 1618)  # Success, reboot required variants
+                        $warningCodes = @(1, 2)  # Success with warnings
+
+                        if ($exitCode -in $successCodes) {
+                            Write-LogProgress "  $($download.Name) installation completed (exit code: $exitCode)" "Success"
+
+                            if ($exitCode -in @(3010, 3011, 1641)) {
+                                Write-LogProgress "  Installation requires reboot (exit code: $exitCode)" "Warning"
+                                Add-RebootReason "$($download.Name) installation"
+                            }
+
+                            $installSuccess = $true
+                        } elseif ($exitCode -in $warningCodes) {
+                            Write-LogProgress "  $($download.Name) installation completed with warnings (exit code: $exitCode)" "Warning"
+                            $installSuccess = $true
                         } else {
-                            Write-LogProgress "  $($download.Name) installer returned exit code: $($process.ExitCode)" "Warning"
+                            Write-LogProgress "  $($download.Name) installation failed with exit code: $exitCode" "Error"
+                            Write-Host "  Installation may have failed - will verify binaries..." -ForegroundColor Yellow
                         }
+
+                        # ============================================================
+                        # POST-INSTALLATION VALIDATION
+                        # ============================================================
+                        Write-LogProgress "    Verifying installation..." "Info"
+
+                        # Wait a moment for files to be written and services to register
+                        Start-Sleep -Seconds 10
+
+                        # Check if primary binary exists
+                        if ($download.ValidatePath -and (Test-Path $download.ValidatePath)) {
+                            Write-LogProgress "    Primary binary verified: $($download.ValidatePath)" "Success"
+                            $installSuccess = $true
+                        } elseif ($download.ValidatePath) {
+                            Write-LogProgress "    Primary binary NOT FOUND: $($download.ValidatePath)" "Error"
+                            $installSuccess = $false
+                        }
+
+                        # Check if services were installed and attempt to start them
+                        if ($download.ServiceNames) {
+                            $serviceIssues = @()
+
+                            foreach ($serviceName in $download.ServiceNames) {
+                                Start-Sleep -Seconds 2  # Give services time to register
+
+                                $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+
+                                if ($service) {
+                                    Write-LogProgress "    Service found: $serviceName (Status: $($service.Status))" "Debug"
+
+                                    # Try to start service if not running
+                                    if ($service.Status -ne "Running") {
+                                        try {
+                                            Write-LogProgress "    Starting service: $serviceName..." "Info"
+                                            Start-Service -Name $serviceName -ErrorAction Stop
+                                            Start-Sleep -Seconds 3
+
+                                            $service = Get-Service -Name $serviceName
+                                            if ($service.Status -eq "Running") {
+                                                Write-LogProgress "    Service started successfully: $serviceName" "Success"
+                                            } else {
+                                                Write-LogProgress "    Service failed to start: $serviceName (Status: $($service.Status))" "Warning"
+                                                $serviceIssues += $serviceName
+                                            }
+                                        } catch {
+                                            Write-LogProgress "    Failed to start service ${serviceName}: $_" "Warning"
+                                            $serviceIssues += $serviceName
+                                        }
+                                    } else {
+                                        Write-LogProgress "    Service running: $serviceName" "Success"
+                                    }
+                                } else {
+                                    Write-LogProgress "    Service NOT FOUND: $serviceName" "Warning"
+                                    $serviceIssues += $serviceName
+                                }
+                            }
+
+                            if ($serviceIssues.Count -gt 0) {
+                                Write-LogProgress "    Warning: $($serviceIssues.Count) service(s) not running: $($serviceIssues -join ', ')" "Warning"
+                                Write-LogProgress "    Services may start after reboot" "Info"
+                                Add-RebootReason "$($download.Name) service activation"
+                            }
+                        }
+
+                        if ($installSuccess) {
+                            Write-Host "  $($download.Name) installed and verified successfully" -ForegroundColor Green
+                        } else {
+                            Write-Host "  $($download.Name) installation FAILED verification" -ForegroundColor Red
+                            Write-LogProgress "  Installation did not complete successfully - manual intervention may be required" "Error"
+                        }
+
                     } catch {
-                        Write-Host "  Failed to install $($download.Name): $_" -ForegroundColor Yellow
+                        Write-Host "  Failed to install $($download.Name): $_" -ForegroundColor Red
+                        Write-LogProgress "  Installation error details: $_" "Error"
                     }
                 } else {
-                    Write-Host "  Failed to download $($download.Name) from all sources" -ForegroundColor Red
+                    Write-Host "  FAILED to download $($download.Name) from all sources" -ForegroundColor Red
+                    Write-LogProgress "  Skipping installation of $($download.Name)" "Error"
                 }
             }
 
