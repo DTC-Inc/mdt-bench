@@ -619,26 +619,74 @@ try {
                             Write-LogProgress "  Extracting $($download.Name)..." "Info"
                             Write-LogProgress "    Running extractor to $($download.ExtractPath)..." "Debug"
 
+                            # Clean up previous extraction attempt if exists
+                            if (Test-Path $download.ExtractPath) {
+                                Write-LogProgress "    Removing previous extraction: $($download.ExtractPath)" "Debug"
+                                Remove-Item -Path $download.ExtractPath -Recurse -Force -ErrorAction SilentlyContinue
+                            }
+
                             # Run extractor silently - no window needed for extraction
                             $extractProcess = Start-Process -FilePath $download.File -ArgumentList "/s" -PassThru -NoNewWindow -ErrorAction Stop
 
-                            # Wait for extraction to complete
+                            # Wait for extraction process to exit
                             $extractStartTime = Get-Date
+                            $extractTimeout = 600  # 10 minutes maximum for extraction
+
                             while (!$extractProcess.HasExited) {
-                                $elapsed = [math]::Round(((Get-Date) - $extractStartTime).TotalMinutes, 1)
-                                if ($elapsed -gt 0 -and ($elapsed % 1) -eq 0) {
-                                    Write-LogProgress "    Still extracting... ($elapsed minutes elapsed)" "Debug"
+                                $elapsed = [math]::Round(((Get-Date) - $extractStartTime).TotalSeconds, 0)
+
+                                # Check for timeout
+                                if ($elapsed -gt $extractTimeout) {
+                                    Write-LogProgress "    Extraction timeout after $extractTimeout seconds" "Error"
+                                    $extractProcess.Kill()
+                                    throw "Extraction process timeout"
                                 }
-                                Start-Sleep -Seconds 10
+
+                                if ($elapsed -gt 0 -and ($elapsed % 30) -eq 0) {
+                                    Write-LogProgress "    Still extracting... ($elapsed seconds elapsed)" "Debug"
+                                }
+                                Start-Sleep -Seconds 5
                             }
 
-                            $extractTime = [math]::Round(((Get-Date) - $extractStartTime).TotalMinutes, 1)
-                            Write-LogProgress "    Extraction completed (took $extractTime minutes)" "Success"
+                            $extractTime = [math]::Round(((Get-Date) - $extractStartTime).TotalSeconds, 1)
+                            Write-LogProgress "    Extractor process exited (took $extractTime seconds)" "Info"
 
-                            # Verify extracted setup exists
+                            # CRITICAL: Wait for child processes to complete extraction
+                            # Dell extractors spawn child processes and exit immediately
+                            Write-LogProgress "    Waiting 30 seconds for extraction to fully complete..." "Info"
+                            Start-Sleep -Seconds 30
+
+                            # Verify extraction was successful
+                            Write-LogProgress "    Verifying extracted files..." "Debug"
+
+                            # Check if extraction path exists
+                            if (!(Test-Path $download.ExtractPath)) {
+                                throw "Extraction path not found: $($download.ExtractPath)"
+                            }
+
+                            # Check for required files
+                            $missingFiles = @()
+                            foreach ($requiredFile in $download.RequiredFiles) {
+                                if (!(Test-Path $requiredFile)) {
+                                    $missingFiles += $requiredFile
+                                    Write-LogProgress "    Missing required file: $requiredFile" "Error"
+                                } else {
+                                    $fileSize = (Get-Item $requiredFile).Length
+                                    Write-LogProgress "    Found: $requiredFile ($fileSize bytes)" "Debug"
+                                }
+                            }
+
+                            if ($missingFiles.Count -gt 0) {
+                                throw "Extraction incomplete - missing $($missingFiles.Count) required file(s)"
+                            }
+
+                            # Verify actual setup file exists
                             if (!(Test-Path $download.ActualSetup)) {
-                                throw "Extracted setup not found at: $($download.ActualSetup)"
+                                throw "Primary setup file not found: $($download.ActualSetup)"
                             }
+
+                            $setupSize = (Get-Item $download.ActualSetup).Length
+                            Write-LogProgress "    Extraction verified successfully (setup size: $setupSize bytes)" "Success"
 
                             Write-LogProgress "  Installing $($download.Name) from extracted files..." "Info"
 
