@@ -472,8 +472,8 @@ try {
 
         # Check if already installed
         $omsaInstalled = Test-Path "C:\Program Files\Dell\SysMgt\oma\bin\omconfig.exe"
-        $ismInstalled = Test-Path "C:\Program Files\Dell\SysMgt\iSM\ism\bin\DellBatteryClient.exe"
-        $dsuInstalled = Test-Path "C:\Program Files\Dell\SysMgt\DSU\dsu.exe"
+        $ismInstalled = Test-Path "C:\Program Files\Dell\SysMgt\iSM\ismeng\bin\dsm_ism_srvmgr.exe"
+        $dsuInstalled = Test-Path "C:\Program Files\Dell\DELL System Update\DSU.exe"
 
         if ($omsaInstalled) {
             Write-LogProgress "Dell OpenManage Server Administrator already installed" "Success"
@@ -532,7 +532,7 @@ try {
                     IsMsi = $true  # FIX: Flag to indicate this needs msiexec.exe
                     ShowWindow = $false
                     Skip = $ismInstalled
-                    ValidatePath = "C:\Program Files\Dell\SysMgt\iSM\ism\bin\DellBatteryClient.exe"
+                    ValidatePath = "C:\Program Files\Dell\SysMgt\iSM\ismeng\bin\dsm_ism_srvmgr.exe"
                     ServiceNames = @("iDRAC Service Module")
                     RequiredFiles = @(
                         "C:\OpenManage\iSM\windows\idracsvcmod.msi"
@@ -550,7 +550,7 @@ try {
                     IsMsi = $false
                     ShowWindow = $false
                     Skip = $dsuInstalled
-                    ValidatePath = "C:\Program Files\Dell\SysMgt\DSU\dsu.exe"
+                    ValidatePath = "C:\Program Files\Dell\DELL System Update\DSU.exe"
                     RequiredFiles = @()
                     # DUPs need extra time as they spawn child installers
                     WaitAfterInstall = 60
