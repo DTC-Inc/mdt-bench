@@ -514,8 +514,7 @@ try {
                     ValidatePath = "C:\Program Files\Dell\SysMgt\oma\bin\omconfig.exe"
                     ServiceNames = @("DSM SA Shared Services", "DSM SA Connection Service", "DSM SA Event Manager")
                     RequiredFiles = @(
-                        "C:\OpenManage\windows\setup.exe",
-                        "C:\OpenManage\windows\setup.ini"
+                        "C:\OpenManage\windows\setup.exe"
                     )
                 },
                 @{
