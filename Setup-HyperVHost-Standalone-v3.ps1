@@ -13,8 +13,8 @@
     The script will log clearly when reboots are needed and can be re-run after each reboot.
 .NOTES
     Author: DTC Inc
-    Version: 3.2 MSP Template (Enhanced Logging & Timeout Handling)
-    Date: 2025-12-19
+    Version: 3.4 MSP Template (Fixed Dell OEM Installation)
+    Date: 2025-01-08
 #>
 
 ## PLEASE COMMENT YOUR VARIABLES DIRECTLY BELOW HERE IF YOU'RE RUNNING FROM A RMM
@@ -39,7 +39,7 @@
 # SECTION 1: RMM VARIABLE DECLARATION AND INPUT HANDLING
 # ============================================================================
 
-$ScriptVersion = "3.2"
+$ScriptVersion = "3.4"
 $ScriptLogName = "HyperVHost-Setup-v3"
 $ServerRole = "HV"  # Hyper-V Host role code
 
@@ -471,16 +471,29 @@ try {
         Write-LogProgress "Dell hardware detected - installing Dell OpenManage and tools" "Info"
 
         # Check if already installed
-        $omsaInstalled = Test-Path "C:\Program Files\Dell\SysMgt\oma\bin"
+        $omsaInstalled = Test-Path "C:\Program Files\Dell\SysMgt\oma\bin\omconfig.exe"
+        $ismInstalled = Test-Path "C:\Program Files\Dell\SysMgt\iSM\ismeng\bin\dsm_ism_srvmgr.exe"
+        $dsuInstalled = Test-Path "C:\Program Files\Dell\DELL System Update\DSU.exe"
 
-        if (!$omsaInstalled) {
-            Write-Host "Dell OpenManage not found, installing..."
+        if ($omsaInstalled) {
+            Write-LogProgress "Dell OpenManage Server Administrator already installed" "Success"
+        }
+        if ($ismInstalled) {
+            Write-LogProgress "iDRAC Service Module already installed" "Success"
+        }
+        if ($dsuInstalled) {
+            Write-LogProgress "Dell System Update already installed" "Success"
+        }
+
+        if (!$omsaInstalled -or !$ismInstalled -or !$dsuInstalled) {
+            Write-Host "Installing missing Dell components..."
 
             # Ensure BITS service is running for reliable downloads
             Write-LogProgress "Ensuring BITS service is running..." "Debug"
             Start-Service -Name BITS -ErrorAction SilentlyContinue
 
             # Download URLs for Dell tools - Using Backblaze B2 public bucket
+            # NOTE: IsMsi flag indicates the ActualSetup is an MSI file requiring msiexec.exe
             $downloads = @(
                 @{
                     Name = "OpenManage Server Administrator"
@@ -488,11 +501,21 @@ try {
                         "https://public-dtc.s3.us-west-002.backblazeb2.com/repo/vendors/dell/OM-SrvAdmin-Dell-Web-WINX64-11.0.1.0-5494_A00.exe"
                     )
                     File = "$env:WINDIR\temp\OMSA_Setup.exe"
-                    IsExtractor = $true  # This exe extracts to C:\OpenManage
+                    IsExtractor = $true
                     ExtractPath = "C:\OpenManage"
-                    ActualSetup = "C:\OpenManage\windows\setup.exe"
-                    Args = "/qn"  # Completely silent installation
+                    # Use /s for silent extraction (Dell self-extracting archives)
+                    ExtractArgs = "/s"
+                    # Use MSI directly - setup.exe wrapper doesn't support silent install
+                    ActualSetup = "C:\OpenManage\windows\SystemsManagementx64\SysMgmtx64.msi"
+                    Args = "/qn REBOOT=ReallySuppress"
+                    IsMsi = $true
                     ShowWindow = $false
+                    Skip = $omsaInstalled
+                    ValidatePath = "C:\Program Files\Dell\SysMgt\oma\bin\omconfig.exe"
+                    ServiceNames = @("DSM SA Shared Services", "DSM SA Connection Service", "DSM SA Event Manager")
+                    RequiredFiles = @(
+                        "C:\OpenManage\windows\SystemsManagementx64\SysMgmtx64.msi"
+                    )
                 },
                 @{
                     Name = "iDRAC Service Module (iSM)"
@@ -500,11 +523,20 @@ try {
                         "https://public-dtc.s3.us-west-002.backblazeb2.com/repo/vendors/dell/OM-iSM-Dell-Web-X64-5.4.2.0-4048.exe"
                     )
                     File = "$env:WINDIR\temp\iSM_Setup.exe"
-                    IsExtractor = $true  # This exe extracts to C:\OpenManage\iSM
+                    IsExtractor = $true
                     ExtractPath = "C:\OpenManage\iSM"
+                    ExtractArgs = "/s"
                     ActualSetup = "C:\OpenManage\iSM\windows\idracsvcmod.msi"
-                    Args = "/qn"  # Completely silent MSI installation
+                    # FIX: MSI arguments for msiexec (will be passed as /i "path" /qn ...)
+                    Args = "/qn REBOOT=ReallySuppress"
+                    IsMsi = $true  # FIX: Flag to indicate this needs msiexec.exe
                     ShowWindow = $false
+                    Skip = $ismInstalled
+                    ValidatePath = "C:\Program Files\Dell\SysMgt\iSM\ismeng\bin\dsm_ism_srvmgr.exe"
+                    ServiceNames = @("iDRAC Service Module")
+                    RequiredFiles = @(
+                        "C:\OpenManage\iSM\windows\idracsvcmod.msi"
+                    )
                 },
                 @{
                     Name = "Dell System Update"
@@ -512,13 +544,27 @@ try {
                         "https://public-dtc.s3.us-west-002.backblazeb2.com/repo/vendors/dell/Systems-Management_Application_W7K0J_WN64_2.1.2.0_A01.EXE"
                     )
                     File = "$env:WINDIR\temp\DSU_Setup.exe"
-                    Args = "/s"  # Silent installation
+                    # DSU is a Dell Update Package (DUP) - needs /s /f for silent forced install
+                    # DUPs spawn child processes and exit, so we need to wait for completion
+                    Args = "/s /f"
+                    IsMsi = $false
                     ShowWindow = $false
+                    Skip = $dsuInstalled
+                    ValidatePath = "C:\Program Files\Dell\DELL System Update\DSU.exe"
+                    RequiredFiles = @()
+                    # DUPs need extra time as they spawn child installers
+                    WaitAfterInstall = 60
                 }
             )
 
             foreach ($download in $downloads) {
+                if ($download.Skip) {
+                    Write-LogProgress "Skipping $($download.Name) - already installed" "Info"
+                    continue
+                }
+
                 $downloadSuccess = $false
+                $installSuccess = $false
 
                 # Try each URL in order until one succeeds
                 foreach ($url in $download.Urls) {
@@ -579,46 +625,126 @@ try {
                             Write-LogProgress "  Extracting $($download.Name)..." "Info"
                             Write-LogProgress "    Running extractor to $($download.ExtractPath)..." "Debug"
 
-                            # Run extractor silently - no window needed for extraction
-                            $extractProcess = Start-Process -FilePath $download.File -ArgumentList "/s" -PassThru -NoNewWindow -ErrorAction Stop
+                            # Clean up previous extraction attempt if exists
+                            if (Test-Path $download.ExtractPath) {
+                                Write-LogProgress "    Removing previous extraction: $($download.ExtractPath)" "Debug"
+                                Remove-Item -Path $download.ExtractPath -Recurse -Force -ErrorAction SilentlyContinue
+                            }
 
-                            # Wait for extraction to complete
+                            # Run extractor silently - use ExtractArgs if specified, otherwise /s
+                            $extractArguments = if ($download.ExtractArgs) { $download.ExtractArgs } else { "/s" }
+                            Write-LogProgress "    Running: $($download.File) $extractArguments" "Debug"
+                            $extractProcess = Start-Process -FilePath $download.File -ArgumentList $extractArguments -PassThru -NoNewWindow -ErrorAction Stop
+
+                            # Wait for extraction process to exit
                             $extractStartTime = Get-Date
+                            $extractTimeout = 600  # 10 minutes maximum for extraction
+
                             while (!$extractProcess.HasExited) {
-                                $elapsed = [math]::Round(((Get-Date) - $extractStartTime).TotalMinutes, 1)
-                                if ($elapsed -gt 0 -and ($elapsed % 1) -eq 0) {
-                                    Write-LogProgress "    Still extracting... ($elapsed minutes elapsed)" "Debug"
+                                $elapsed = [math]::Round(((Get-Date) - $extractStartTime).TotalSeconds, 0)
+
+                                # Check for timeout
+                                if ($elapsed -gt $extractTimeout) {
+                                    Write-LogProgress "    Extraction timeout after $extractTimeout seconds" "Error"
+                                    $extractProcess.Kill()
+                                    throw "Extraction process timeout"
                                 }
-                                Start-Sleep -Seconds 10
+
+                                if ($elapsed -gt 0 -and ($elapsed % 30) -eq 0) {
+                                    Write-LogProgress "    Still extracting... ($elapsed seconds elapsed)" "Debug"
+                                }
+                                Start-Sleep -Seconds 5
                             }
 
-                            $extractTime = [math]::Round(((Get-Date) - $extractStartTime).TotalMinutes, 1)
-                            Write-LogProgress "    Extraction completed (took $extractTime minutes)" "Success"
+                            $extractTime = [math]::Round(((Get-Date) - $extractStartTime).TotalSeconds, 1)
+                            Write-LogProgress "    Extractor process exited (took $extractTime seconds)" "Info"
 
-                            # Verify extracted setup exists
+                            # CRITICAL: Wait for child processes to complete extraction
+                            # Dell extractors spawn child processes and exit immediately
+                            Write-LogProgress "    Waiting 30 seconds for extraction to fully complete..." "Info"
+                            Start-Sleep -Seconds 30
+
+                            # Verify extraction was successful
+                            Write-LogProgress "    Verifying extracted files..." "Debug"
+
+                            # Check if extraction path exists
+                            if (!(Test-Path $download.ExtractPath)) {
+                                throw "Extraction path not found: $($download.ExtractPath)"
+                            }
+
+                            # Check for required files
+                            $missingFiles = @()
+                            foreach ($requiredFile in $download.RequiredFiles) {
+                                if (!(Test-Path $requiredFile)) {
+                                    $missingFiles += $requiredFile
+                                    Write-LogProgress "    Missing required file: $requiredFile" "Error"
+                                } else {
+                                    $fileSize = (Get-Item $requiredFile).Length
+                                    Write-LogProgress "    Found: $requiredFile ($fileSize bytes)" "Debug"
+                                }
+                            }
+
+                            if ($missingFiles.Count -gt 0) {
+                                throw "Extraction incomplete - missing $($missingFiles.Count) required file(s)"
+                            }
+
+                            # Verify actual setup file exists
                             if (!(Test-Path $download.ActualSetup)) {
-                                throw "Extracted setup not found at: $($download.ActualSetup)"
+                                throw "Primary setup file not found: $($download.ActualSetup)"
                             }
+
+                            $setupSize = (Get-Item $download.ActualSetup).Length
+                            Write-LogProgress "    Extraction verified successfully (setup size: $setupSize bytes)" "Success"
 
                             Write-LogProgress "  Installing $($download.Name) from extracted files..." "Info"
 
-                            # Now run the actual setup from extracted location
-                            if ($download.ShowWindow) {
-                                Write-LogProgress "    Installation window will show progress - DO NOT CLOSE IT!" "Warning"
-                                $process = Start-Process -FilePath $download.ActualSetup -ArgumentList $download.Args -PassThru
+                            # FIX: Handle MSI files differently - they require msiexec.exe
+                            if ($download.IsMsi) {
+                                Write-LogProgress "    Detected MSI installer - using msiexec.exe" "Debug"
+                                $msiArgs = "/i `"$($download.ActualSetup)`" $($download.Args)"
+                                Write-LogProgress "    msiexec.exe $msiArgs" "Debug"
+
+                                if ($download.ShowWindow) {
+                                    Write-LogProgress "    Installation window will show progress - DO NOT CLOSE IT!" "Warning"
+                                    $process = Start-Process -FilePath "msiexec.exe" -ArgumentList $msiArgs -PassThru
+                                } else {
+                                    $process = Start-Process -FilePath "msiexec.exe" -ArgumentList $msiArgs -PassThru -NoNewWindow
+                                }
                             } else {
-                                $process = Start-Process -FilePath $download.ActualSetup -ArgumentList $download.Args -PassThru -NoNewWindow
+                                # Standard EXE installer
+                                Write-LogProgress "    Running: $($download.ActualSetup) $($download.Args)" "Debug"
+
+                                if ($download.ShowWindow) {
+                                    Write-LogProgress "    Installation window will show progress - DO NOT CLOSE IT!" "Warning"
+                                    $process = Start-Process -FilePath $download.ActualSetup -ArgumentList $download.Args -PassThru
+                                } else {
+                                    $process = Start-Process -FilePath $download.ActualSetup -ArgumentList $download.Args -PassThru -NoNewWindow
+                                }
                             }
                         } else {
                             # Normal installer - not an extractor
                             Write-LogProgress "  Installing $($download.Name)..." "Info"
 
-                            # Start installer - show window if configured
-                            if ($download.ShowWindow) {
-                                Write-LogProgress "    Installation window will show progress - DO NOT CLOSE IT!" "Warning"
-                                $process = Start-Process -FilePath $download.File -ArgumentList $download.Args -PassThru
+                            # FIX: Handle MSI files differently - they require msiexec.exe
+                            if ($download.IsMsi) {
+                                Write-LogProgress "    Detected MSI installer - using msiexec.exe" "Debug"
+                                $msiArgs = "/i `"$($download.File)`" $($download.Args)"
+                                Write-LogProgress "    msiexec.exe $msiArgs" "Debug"
+
+                                if ($download.ShowWindow) {
+                                    Write-LogProgress "    Installation window will show progress - DO NOT CLOSE IT!" "Warning"
+                                    $process = Start-Process -FilePath "msiexec.exe" -ArgumentList $msiArgs -PassThru
+                                } else {
+                                    $process = Start-Process -FilePath "msiexec.exe" -ArgumentList $msiArgs -PassThru -NoNewWindow
+                                }
                             } else {
-                                $process = Start-Process -FilePath $download.File -ArgumentList $download.Args -PassThru -NoNewWindow
+                                # Standard EXE installer
+                                if ($download.ShowWindow) {
+                                    Write-LogProgress "    Installation window will show progress - DO NOT CLOSE IT!" "Warning"
+                                    $process = Start-Process -FilePath $download.File -ArgumentList $download.Args -PassThru
+                                } else {
+                                    $process = Start-Process -FilePath $download.File -ArgumentList $download.Args -PassThru -NoNewWindow
+                                }
                             }
                         }
 
@@ -639,20 +765,128 @@ try {
 
                         # Check exit code
                         $totalTime = [math]::Round(((Get-Date) - $startTime).TotalMinutes, 1)
+                        $exitCode = $process.ExitCode
 
-                        if ($process.ExitCode -eq 0) {
-                            Write-LogProgress "  $($download.Name) installed successfully (took $totalTime minutes)" "Success"
-                        } elseif ($process.ExitCode -eq 3010 -or $process.ExitCode -eq 3011) {
-                            Write-LogProgress "  $($download.Name) installed but requires reboot (exit code: $($process.ExitCode))" "Warning"
-                            Add-RebootReason "$($download.Name) installation"
+                        Write-LogProgress "    Installation completed with exit code: $exitCode (took $totalTime minutes)" "Info"
+
+                        # Common installer exit codes
+                        $successCodes = @(0, 3010, 3011, 1641, 1618)  # Success, reboot required variants
+                        $warningCodes = @(1, 2)  # Success with warnings
+
+                        if ($exitCode -in $successCodes) {
+                            Write-LogProgress "  $($download.Name) installation completed (exit code: $exitCode)" "Success"
+
+                            if ($exitCode -in @(3010, 3011, 1641)) {
+                                Write-LogProgress "  Installation requires reboot (exit code: $exitCode)" "Warning"
+                                Add-RebootReason "$($download.Name) installation"
+                            }
+
+                            $installSuccess = $true
+                        } elseif ($exitCode -in $warningCodes) {
+                            Write-LogProgress "  $($download.Name) installation completed with warnings (exit code: $exitCode)" "Warning"
+                            $installSuccess = $true
                         } else {
-                            Write-LogProgress "  $($download.Name) installer returned exit code: $($process.ExitCode)" "Warning"
+                            Write-LogProgress "  $($download.Name) installation failed with exit code: $exitCode" "Error"
+                            Write-Host "  Installation may have failed - will verify binaries..." -ForegroundColor Yellow
                         }
+
+                        # ============================================================
+                        # POST-INSTALLATION VALIDATION
+                        # ============================================================
+                        Write-LogProgress "    Verifying installation..." "Info"
+
+                        # Wait for files to be written and services to register
+                        # Some installers (Dell DUPs) spawn child processes that need more time
+                        $waitTime = if ($download.WaitAfterInstall) { $download.WaitAfterInstall } else { 10 }
+                        Write-LogProgress "    Waiting $waitTime seconds for installation to finalize..." "Debug"
+                        Start-Sleep -Seconds $waitTime
+
+                        # Check if primary binary exists (with retry for slow installers)
+                        if ($download.ValidatePath) {
+                            $maxRetries = 3
+                            $retryCount = 0
+                            $binaryFound = $false
+
+                            while ($retryCount -lt $maxRetries -and !$binaryFound) {
+                                if (Test-Path $download.ValidatePath) {
+                                    Write-LogProgress "    Primary binary verified: $($download.ValidatePath)" "Success"
+                                    $installSuccess = $true
+                                    $binaryFound = $true
+                                } else {
+                                    $retryCount++
+                                    if ($retryCount -lt $maxRetries) {
+                                        Write-LogProgress "    Binary not found yet, waiting 30 seconds (attempt $retryCount of $maxRetries)..." "Debug"
+                                        Start-Sleep -Seconds 30
+                                    }
+                                }
+                            }
+
+                            if (!$binaryFound) {
+                                Write-LogProgress "    Primary binary NOT FOUND after $maxRetries attempts: $($download.ValidatePath)" "Error"
+                                $installSuccess = $false
+                            }
+                        }
+
+                        # Check if services were installed and attempt to start them
+                        if ($download.ServiceNames) {
+                            $serviceIssues = @()
+
+                            foreach ($serviceName in $download.ServiceNames) {
+                                Start-Sleep -Seconds 2  # Give services time to register
+
+                                $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+
+                                if ($service) {
+                                    Write-LogProgress "    Service found: $serviceName (Status: $($service.Status))" "Debug"
+
+                                    # Try to start service if not running
+                                    if ($service.Status -ne "Running") {
+                                        try {
+                                            Write-LogProgress "    Starting service: $serviceName..." "Info"
+                                            Start-Service -Name $serviceName -ErrorAction Stop
+                                            Start-Sleep -Seconds 3
+
+                                            $service = Get-Service -Name $serviceName
+                                            if ($service.Status -eq "Running") {
+                                                Write-LogProgress "    Service started successfully: $serviceName" "Success"
+                                            } else {
+                                                Write-LogProgress "    Service failed to start: $serviceName (Status: $($service.Status))" "Warning"
+                                                $serviceIssues += $serviceName
+                                            }
+                                        } catch {
+                                            Write-LogProgress "    Failed to start service ${serviceName}: $_" "Warning"
+                                            $serviceIssues += $serviceName
+                                        }
+                                    } else {
+                                        Write-LogProgress "    Service running: $serviceName" "Success"
+                                    }
+                                } else {
+                                    Write-LogProgress "    Service NOT FOUND: $serviceName" "Warning"
+                                    $serviceIssues += $serviceName
+                                }
+                            }
+
+                            if ($serviceIssues.Count -gt 0) {
+                                Write-LogProgress "    Warning: $($serviceIssues.Count) service(s) not running: $($serviceIssues -join ', ')" "Warning"
+                                Write-LogProgress "    Services may start after reboot" "Info"
+                                Add-RebootReason "$($download.Name) service activation"
+                            }
+                        }
+
+                        if ($installSuccess) {
+                            Write-Host "  $($download.Name) installed and verified successfully" -ForegroundColor Green
+                        } else {
+                            Write-Host "  $($download.Name) installation FAILED verification" -ForegroundColor Red
+                            Write-LogProgress "  Installation did not complete successfully - manual intervention may be required" "Error"
+                        }
+
                     } catch {
-                        Write-Host "  Failed to install $($download.Name): $_" -ForegroundColor Yellow
+                        Write-Host "  Failed to install $($download.Name): $_" -ForegroundColor Red
+                        Write-LogProgress "  Installation error details: $_" "Error"
                     }
                 } else {
-                    Write-Host "  Failed to download $($download.Name) from all sources" -ForegroundColor Red
+                    Write-Host "  FAILED to download $($download.Name) from all sources" -ForegroundColor Red
+                    Write-LogProgress "  Skipping installation of $($download.Name)" "Error"
                 }
             }
 
