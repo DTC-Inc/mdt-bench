@@ -503,8 +503,8 @@ try {
                     File = "$env:WINDIR\temp\OMSA_Setup.exe"
                     IsExtractor = $true
                     ExtractPath = "C:\OpenManage"
-                    # Use /auto for silent extraction - /s alone shows a prompt
-                    ExtractArgs = "/auto /s"
+                    # Use /s for silent extraction (Dell self-extracting archives)
+                    ExtractArgs = "/s"
                     ActualSetup = "C:\OpenManage\windows\setup.exe"
                     # FIX: Dell OMSA setup.exe requires /auto for silent install, not /qn
                     Args = "/auto"
@@ -526,7 +526,7 @@ try {
                     File = "$env:WINDIR\temp\iSM_Setup.exe"
                     IsExtractor = $true
                     ExtractPath = "C:\OpenManage\iSM"
-                    ExtractArgs = "/auto /s"
+                    ExtractArgs = "/s"
                     ActualSetup = "C:\OpenManage\iSM\windows\idracsvcmod.msi"
                     # FIX: MSI arguments for msiexec (will be passed as /i "path" /qn ...)
                     Args = "/qn REBOOT=ReallySuppress"
