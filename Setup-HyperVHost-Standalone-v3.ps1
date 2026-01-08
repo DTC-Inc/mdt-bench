@@ -505,16 +505,16 @@ try {
                     ExtractPath = "C:\OpenManage"
                     # Use /s for silent extraction (Dell self-extracting archives)
                     ExtractArgs = "/s"
-                    ActualSetup = "C:\OpenManage\windows\setup.exe"
-                    # FIX: Dell OMSA setup.exe requires /auto for silent install, not /qn
-                    Args = "/auto"
-                    IsMsi = $false
+                    # Use MSI directly - setup.exe wrapper doesn't support silent install
+                    ActualSetup = "C:\OpenManage\windows\SystemsManagementx64\SysMgmtx64.msi"
+                    Args = "/qn REBOOT=ReallySuppress"
+                    IsMsi = $true
                     ShowWindow = $false
                     Skip = $omsaInstalled
                     ValidatePath = "C:\Program Files\Dell\SysMgt\oma\bin\omconfig.exe"
                     ServiceNames = @("DSM SA Shared Services", "DSM SA Connection Service", "DSM SA Event Manager")
                     RequiredFiles = @(
-                        "C:\OpenManage\windows\setup.exe"
+                        "C:\OpenManage\windows\SystemsManagementx64\SysMgmtx64.msi"
                     )
                 },
                 @{
