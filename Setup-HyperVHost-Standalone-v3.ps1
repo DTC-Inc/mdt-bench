@@ -13,8 +13,8 @@
     The script will log clearly when reboots are needed and can be re-run after each reboot.
 .NOTES
     Author: DTC Inc
-    Version: 3.2 MSP Template (Enhanced Logging & Timeout Handling)
-    Date: 2025-12-19
+    Version: 3.4 MSP Template (Fixed Dell OEM Installation)
+    Date: 2025-01-08
 #>
 
 ## PLEASE COMMENT YOUR VARIABLES DIRECTLY BELOW HERE IF YOU'RE RUNNING FROM A RMM
@@ -39,7 +39,7 @@
 # SECTION 1: RMM VARIABLE DECLARATION AND INPUT HANDLING
 # ============================================================================
 
-$ScriptVersion = "3.2"
+$ScriptVersion = "3.4"
 $ScriptLogName = "HyperVHost-Setup-v3"
 $ServerRole = "HV"  # Hyper-V Host role code
 
@@ -481,6 +481,7 @@ try {
             Start-Service -Name BITS -ErrorAction SilentlyContinue
 
             # Download URLs for Dell tools - Using Backblaze B2 public bucket
+            # NOTE: IsMsi flag indicates the ActualSetup is an MSI file requiring msiexec.exe
             $downloads = @(
                 @{
                     Name = "OpenManage Server Administrator"
@@ -491,7 +492,9 @@ try {
                     IsExtractor = $true  # This exe extracts to C:\OpenManage
                     ExtractPath = "C:\OpenManage"
                     ActualSetup = "C:\OpenManage\windows\setup.exe"
-                    Args = "/qn"  # Completely silent installation
+                    # FIX: Dell OMSA setup.exe requires /auto for silent install, not /qn
+                    Args = "/auto"
+                    IsMsi = $false
                     ShowWindow = $false
                 },
                 @{
@@ -503,7 +506,9 @@ try {
                     IsExtractor = $true  # This exe extracts to C:\OpenManage\iSM
                     ExtractPath = "C:\OpenManage\iSM"
                     ActualSetup = "C:\OpenManage\iSM\windows\idracsvcmod.msi"
-                    Args = "/qn"  # Completely silent MSI installation
+                    # FIX: MSI arguments for msiexec (will be passed as /i "path" /qn ...)
+                    Args = "/qn REBOOT=ReallySuppress"
+                    IsMsi = $true  # FIX: Flag to indicate this needs msiexec.exe
                     ShowWindow = $false
                 },
                 @{
@@ -513,6 +518,7 @@ try {
                     )
                     File = "$env:WINDIR\temp\DSU_Setup.exe"
                     Args = "/s"  # Silent installation
+                    IsMsi = $false
                     ShowWindow = $false
                 }
             )
@@ -602,23 +608,53 @@ try {
 
                             Write-LogProgress "  Installing $($download.Name) from extracted files..." "Info"
 
-                            # Now run the actual setup from extracted location
-                            if ($download.ShowWindow) {
-                                Write-LogProgress "    Installation window will show progress - DO NOT CLOSE IT!" "Warning"
-                                $process = Start-Process -FilePath $download.ActualSetup -ArgumentList $download.Args -PassThru
+                            # FIX: Handle MSI files differently - they require msiexec.exe
+                            if ($download.IsMsi) {
+                                Write-LogProgress "    Detected MSI installer - using msiexec.exe" "Debug"
+                                $msiArgs = "/i `"$($download.ActualSetup)`" $($download.Args)"
+                                Write-LogProgress "    msiexec.exe $msiArgs" "Debug"
+
+                                if ($download.ShowWindow) {
+                                    Write-LogProgress "    Installation window will show progress - DO NOT CLOSE IT!" "Warning"
+                                    $process = Start-Process -FilePath "msiexec.exe" -ArgumentList $msiArgs -PassThru
+                                } else {
+                                    $process = Start-Process -FilePath "msiexec.exe" -ArgumentList $msiArgs -PassThru -NoNewWindow
+                                }
                             } else {
-                                $process = Start-Process -FilePath $download.ActualSetup -ArgumentList $download.Args -PassThru -NoNewWindow
+                                # Standard EXE installer
+                                Write-LogProgress "    Running: $($download.ActualSetup) $($download.Args)" "Debug"
+
+                                if ($download.ShowWindow) {
+                                    Write-LogProgress "    Installation window will show progress - DO NOT CLOSE IT!" "Warning"
+                                    $process = Start-Process -FilePath $download.ActualSetup -ArgumentList $download.Args -PassThru
+                                } else {
+                                    $process = Start-Process -FilePath $download.ActualSetup -ArgumentList $download.Args -PassThru -NoNewWindow
+                                }
                             }
                         } else {
                             # Normal installer - not an extractor
                             Write-LogProgress "  Installing $($download.Name)..." "Info"
 
-                            # Start installer - show window if configured
-                            if ($download.ShowWindow) {
-                                Write-LogProgress "    Installation window will show progress - DO NOT CLOSE IT!" "Warning"
-                                $process = Start-Process -FilePath $download.File -ArgumentList $download.Args -PassThru
+                            # FIX: Handle MSI files differently - they require msiexec.exe
+                            if ($download.IsMsi) {
+                                Write-LogProgress "    Detected MSI installer - using msiexec.exe" "Debug"
+                                $msiArgs = "/i `"$($download.File)`" $($download.Args)"
+                                Write-LogProgress "    msiexec.exe $msiArgs" "Debug"
+
+                                if ($download.ShowWindow) {
+                                    Write-LogProgress "    Installation window will show progress - DO NOT CLOSE IT!" "Warning"
+                                    $process = Start-Process -FilePath "msiexec.exe" -ArgumentList $msiArgs -PassThru
+                                } else {
+                                    $process = Start-Process -FilePath "msiexec.exe" -ArgumentList $msiArgs -PassThru -NoNewWindow
+                                }
                             } else {
-                                $process = Start-Process -FilePath $download.File -ArgumentList $download.Args -PassThru -NoNewWindow
+                                # Standard EXE installer
+                                if ($download.ShowWindow) {
+                                    Write-LogProgress "    Installation window will show progress - DO NOT CLOSE IT!" "Warning"
+                                    $process = Start-Process -FilePath $download.File -ArgumentList $download.Args -PassThru
+                                } else {
+                                    $process = Start-Process -FilePath $download.File -ArgumentList $download.Args -PassThru -NoNewWindow
+                                }
                             }
                         }
 
