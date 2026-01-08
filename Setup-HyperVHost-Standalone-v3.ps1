@@ -545,12 +545,16 @@ try {
                         "https://public-dtc.s3.us-west-002.backblazeb2.com/repo/vendors/dell/Systems-Management_Application_W7K0J_WN64_2.1.2.0_A01.EXE"
                     )
                     File = "$env:WINDIR\temp\DSU_Setup.exe"
-                    Args = "/s"  # Silent installation
+                    # DSU is a Dell Update Package (DUP) - needs /s /f for silent forced install
+                    # DUPs spawn child processes and exit, so we need to wait for completion
+                    Args = "/s /f"
                     IsMsi = $false
                     ShowWindow = $false
                     Skip = $dsuInstalled
                     ValidatePath = "C:\Program Files\Dell\SysMgt\DSU\dsu.exe"
                     RequiredFiles = @()
+                    # DUPs need extra time as they spawn child installers
+                    WaitAfterInstall = 60
                 }
             )
 
@@ -792,16 +796,36 @@ try {
                         # ============================================================
                         Write-LogProgress "    Verifying installation..." "Info"
 
-                        # Wait a moment for files to be written and services to register
-                        Start-Sleep -Seconds 10
+                        # Wait for files to be written and services to register
+                        # Some installers (Dell DUPs) spawn child processes that need more time
+                        $waitTime = if ($download.WaitAfterInstall) { $download.WaitAfterInstall } else { 10 }
+                        Write-LogProgress "    Waiting $waitTime seconds for installation to finalize..." "Debug"
+                        Start-Sleep -Seconds $waitTime
 
-                        # Check if primary binary exists
-                        if ($download.ValidatePath -and (Test-Path $download.ValidatePath)) {
-                            Write-LogProgress "    Primary binary verified: $($download.ValidatePath)" "Success"
-                            $installSuccess = $true
-                        } elseif ($download.ValidatePath) {
-                            Write-LogProgress "    Primary binary NOT FOUND: $($download.ValidatePath)" "Error"
-                            $installSuccess = $false
+                        # Check if primary binary exists (with retry for slow installers)
+                        if ($download.ValidatePath) {
+                            $maxRetries = 3
+                            $retryCount = 0
+                            $binaryFound = $false
+
+                            while ($retryCount -lt $maxRetries -and !$binaryFound) {
+                                if (Test-Path $download.ValidatePath) {
+                                    Write-LogProgress "    Primary binary verified: $($download.ValidatePath)" "Success"
+                                    $installSuccess = $true
+                                    $binaryFound = $true
+                                } else {
+                                    $retryCount++
+                                    if ($retryCount -lt $maxRetries) {
+                                        Write-LogProgress "    Binary not found yet, waiting 30 seconds (attempt $retryCount of $maxRetries)..." "Debug"
+                                        Start-Sleep -Seconds 30
+                                    }
+                                }
+                            }
+
+                            if (!$binaryFound) {
+                                Write-LogProgress "    Primary binary NOT FOUND after $maxRetries attempts: $($download.ValidatePath)" "Error"
+                                $installSuccess = $false
+                            }
                         }
 
                         # Check if services were installed and attempt to start them
